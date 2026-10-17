@@ -417,7 +417,6 @@ static void load_state_from_disk(void) {
     }
     g_free(path);
 
-    // If no chapters exist, or deserialization resulted in a missing root, create default
     if (!loaded_successfully || app_state->chapters->len == 0) {
         for (guint i = 0; i < app_state->chapters->len; i++) {
             chapter_free(g_ptr_array_index(app_state->chapters, i));
@@ -433,12 +432,12 @@ static void load_state_from_disk(void) {
         app_state->active_chapter_id = g_strdup(first->id);
     }
     
-    // Final safety check: if active chapter still has no root, assign a default one
     active = get_active_chapter();
     if (active && !active->root) {
         active->root = node_new(active->title ? active->title : "Mind Map");
     }
 }
+
 /* =========================================================================
  * Optimized Text Metrics & Animation Engine
  * ========================================================================= */
@@ -553,7 +552,7 @@ static void start_node_animation(MindNode *node, gboolean expand) {
     anim->start_val = node->anim_progress;
     anim->target_val = target;
     anim->start_time = now;
-    anim->duration = 300000; // 300 ms buttery smooth duration
+    anim->duration = 300000;
 
     if (app_state->active_animations->len == 1 && anim == g_ptr_array_index(app_state->active_animations, 0)) {
         gtk_widget_add_tick_callback(app_state->drawing_area, drawing_area_tick_cb, NULL, NULL);
@@ -712,30 +711,58 @@ static void draw_nodes_recursive(cairo_t *cr, PangoContext *pctx, MindNode *n) {
     gboolean is_root = (n->depth == 0);
     cairo_surface_t *surf = node_get_surface(n);
     gboolean has_img = (surf != NULL);
-    int img_s = has_img ? (n->image_size > 0 ? n->image_size : (is_root ? 56 : 40)) : 0;
 
     if (has_img) {
-        double img_x = is_root ? (n->y - 15.0 - img_s) : (n->y + 15.0);
-        double img_y = n->x - (img_s / 2.0);
-
         int tw = cairo_image_surface_get_width(surf);
         int th = cairo_image_surface_get_height(surf);
         if (tw > 0 && th > 0) {
+            // Dynamically calculate container dimensions to match the image aspect ratio
+            double max_s = n->image_size > 0 ? n->image_size : (is_root ? 56 : 40);
+            double img_w, img_h;
+            if (tw >= th) {
+                img_w = max_s;
+                img_h = max_s * ((double)th / tw);
+            } else {
+                img_h = max_s;
+                img_w = max_s * ((double)tw / th);
+            }
+
+            double img_x = is_root ? (n->y - 15.0 - img_w) : (n->y + 15.0);
+            double img_y = n->x - (img_h / 2.0);
+
             cairo_save(cr);
-            double r = 8.0;
+            
+            // Draw rounded background container matching exact image dimensions
+            double r = 6.0;
             cairo_new_path(cr);
-            cairo_arc(cr, img_x + img_s - r, img_y + r, r, -G_PI / 2, 0);
-            cairo_arc(cr, img_x + img_s - r, img_y + img_s - r, r, 0, G_PI / 2);
-            cairo_arc(cr, img_x + r, img_y + img_s - r, r, G_PI / 2, G_PI);
+            cairo_arc(cr, img_x + img_w - r, img_y + r, r, -G_PI / 2, 0);
+            cairo_arc(cr, img_x + img_w - r, img_y + img_h - r, r, 0, G_PI / 2);
+            cairo_arc(cr, img_x + r, img_y + img_h - r, r, G_PI / 2, G_PI);
             cairo_arc(cr, img_x + r, img_y + r, r, G_PI, 3 * G_PI / 2);
             cairo_close_path(cr);
+            
+            cairo_set_source_rgba(cr, 0.15, 0.18, 0.22, 0.9);
+            cairo_fill_preserve(cr);
             cairo_clip(cr);
 
-            double scale = fmax((double)img_s / tw, (double)img_s / th);
-            cairo_translate(cr, img_x + img_s / 2.0, img_y + img_s / 2.0);
-            cairo_scale(cr, scale, scale);
-            cairo_set_source_surface(cr, surf, -tw / 2.0, -th / 2.0);
+            // Paint image uniformly without cropping or letterboxing
+            cairo_translate(cr, img_x, img_y);
+            cairo_scale(cr, (double)img_w / tw, (double)img_h / th);
+            cairo_set_source_surface(cr, surf, 0, 0);
             cairo_paint(cr);
+            cairo_restore(cr);
+
+            // Subtle border outline
+            cairo_save(cr);
+            cairo_new_path(cr);
+            cairo_arc(cr, img_x + img_w - r, img_y + r, r, -G_PI / 2, 0);
+            cairo_arc(cr, img_x + img_w - r, img_y + img_h - r, r, 0, G_PI / 2);
+            cairo_arc(cr, img_x + r, img_y + img_h - r, r, G_PI / 2, G_PI);
+            cairo_arc(cr, img_x + r, img_y + r, r, G_PI, 3 * G_PI / 2);
+            cairo_close_path(cr);
+            cairo_set_line_width(cr, 1.0);
+            cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.15);
+            cairo_stroke(cr);
             cairo_restore(cr);
         }
     }
@@ -745,12 +772,20 @@ static void draw_nodes_recursive(cairo_t *cr, PangoContext *pctx, MindNode *n) {
         PangoRectangle ink_rect, logical_rect;
         pango_layout_get_pixel_extents(layout, &ink_rect, &logical_rect);
 
+        double img_w_offset = 0;
+        if (has_img) {
+            int tw = cairo_image_surface_get_width(surf);
+            int th = cairo_image_surface_get_height(surf);
+            double max_s = n->image_size > 0 ? n->image_size : (is_root ? 56 : 40);
+            img_w_offset = (tw >= th) ? max_s : (max_s * ((double)tw / th));
+        }
+
         double text_x;
         if (is_root) {
-            double gap = has_img ? (15.0 + img_s + 10.0) : 20.0;
+            double gap = has_img ? (15.0 + img_w_offset + 10.0) : 20.0;
             text_x = n->y - gap - logical_rect.width - logical_rect.x;
         } else {
-            double gap = has_img ? (15.0 + img_s + 10.0) : 20.0;
+            double gap = has_img ? (15.0 + img_w_offset + 10.0) : 20.0;
             text_x = n->y + gap - logical_rect.x;
         }
         double text_y = n->x - (logical_rect.height / 2.0) - logical_rect.y;
@@ -1229,8 +1264,6 @@ static void rebuild_sidebar(void) {
 static void load_chapter(const char *id, gboolean reset_view) {
     if (!id) return;
     
-    // Safely duplicate the ID first so we don't hit use-after-free issues if 'id' 
-    // points to app_state->active_chapter_id
     char *new_id = g_strdup(id);
     g_free(app_state->active_chapter_id);
     app_state->active_chapter_id = new_id;
@@ -1380,7 +1413,7 @@ static void on_import_clicked(GtkButton *btn, gpointer user_data) {
 
 static gboolean on_window_close_request(GtkWindow *window, gpointer user_data) {
     save_state_to_disk();
-    return FALSE; // Return FALSE to allow the window to close normally
+    return FALSE;
 }
 
 static void on_toggle_sidebar(GtkButton *btn, gpointer user_data) {
@@ -1553,7 +1586,6 @@ static void activate(GtkApplication *app, gpointer user_data) {
     adw_overlay_split_view_set_min_sidebar_width(app_state->split_view, 288);
     adw_overlay_split_view_set_max_sidebar_width(app_state->split_view, 288);
 
-    /* Sidebar Construction */
     GtkWidget *sidebar_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_widget_add_css_class(sidebar_box, "sidebar-box");
 
@@ -1601,7 +1633,6 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
     adw_overlay_split_view_set_sidebar(app_state->split_view, sidebar_box);
 
-    /* Main Content Overlay & Canvas */
     GtkWidget *overlay = gtk_overlay_new();
     app_state->drawing_area = gtk_drawing_area_new();
     gtk_widget_set_hexpand(app_state->drawing_area, TRUE);
@@ -1651,7 +1682,6 @@ static void activate(GtkApplication *app, gpointer user_data) {
     adw_application_window_set_content(ADW_APPLICATION_WINDOW(app_state->window),
                                        GTK_WIDGET(app_state->split_view));
 
-    /* Canvas Gestures */
     GtkGesture *left_click = gtk_gesture_click_new();
     gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(left_click), GDK_BUTTON_PRIMARY);
     g_signal_connect(left_click, "released", G_CALLBACK(on_left_click), NULL);
