@@ -408,22 +408,37 @@ static void save_state_to_disk(void) {
 static void load_state_from_disk(void) {
     char *path = get_state_file_path();
     char *contents = NULL;
+    
+    gboolean loaded_successfully = FALSE;
     if (g_file_get_contents(path, &contents, NULL, NULL)) {
         restore_from_json_string(contents, TRUE);
         g_free(contents);
+        loaded_successfully = (app_state->chapters->len > 0);
     }
     g_free(path);
 
-    if (app_state->chapters->len == 0) {
+    // If no chapters exist, or deserialization resulted in a missing root, create default
+    if (!loaded_successfully || app_state->chapters->len == 0) {
+        for (guint i = 0; i < app_state->chapters->len; i++) {
+            chapter_free(g_ptr_array_index(app_state->chapters, i));
+        }
+        g_ptr_array_set_size(app_state->chapters, 0);
         g_ptr_array_add(app_state->chapters, create_default_chapter());
     }
-    if (!get_active_chapter() && app_state->chapters->len > 0) {
+
+    Chapter *active = get_active_chapter();
+    if (!active || !active->root) {
         Chapter *first = g_ptr_array_index(app_state->chapters, 0);
         g_free(app_state->active_chapter_id);
         app_state->active_chapter_id = g_strdup(first->id);
     }
+    
+    // Final safety check: if active chapter still has no root, assign a default one
+    active = get_active_chapter();
+    if (active && !active->root) {
+        active->root = node_new(active->title ? active->title : "Mind Map");
+    }
 }
-
 /* =========================================================================
  * Optimized Text Metrics & Animation Engine
  * ========================================================================= */
@@ -1212,8 +1227,13 @@ static void rebuild_sidebar(void) {
 }
 
 static void load_chapter(const char *id, gboolean reset_view) {
+    if (!id) return;
+    
+    // Safely duplicate the ID first so we don't hit use-after-free issues if 'id' 
+    // points to app_state->active_chapter_id
+    char *new_id = g_strdup(id);
     g_free(app_state->active_chapter_id);
-    app_state->active_chapter_id = g_strdup(id);
+    app_state->active_chapter_id = new_id;
 
     Chapter *active_ch = get_active_chapter();
     if (active_ch && active_ch->root) {
@@ -1358,6 +1378,11 @@ static void on_import_clicked(GtkButton *btn, gpointer user_data) {
  * Window & UI Assembly
  * ========================================================================= */
 
+static gboolean on_window_close_request(GtkWindow *window, gpointer user_data) {
+    save_state_to_disk();
+    return FALSE; // Return FALSE to allow the window to close normally
+}
+
 static void on_toggle_sidebar(GtkButton *btn, gpointer user_data) {
     gboolean cur = adw_overlay_split_view_get_show_sidebar(app_state->split_view);
     adw_overlay_split_view_set_show_sidebar(app_state->split_view, !cur);
@@ -1489,6 +1514,8 @@ static void apply_nord_css(void) {
 static gboolean initialize_app_state_cb(gpointer user_data) {
     load_state_from_disk();
     
+    adw_overlay_split_view_set_show_sidebar(app_state->split_view, FALSE);
+
     Chapter *active = get_active_chapter();
     if (!active && app_state->chapters->len > 0) {
         Chapter *first = g_ptr_array_index(app_state->chapters, 0);
@@ -1501,6 +1528,15 @@ static gboolean initialize_app_state_cb(gpointer user_data) {
     }
     commit_history();
     return G_SOURCE_REMOVE;
+}
+
+static void on_drawing_area_realize(GtkWidget *widget, gpointer user_data) {
+    Chapter *ch = get_active_chapter();
+    if (ch && ch->root) {
+        PangoContext *pctx = gtk_widget_get_pango_context(widget);
+        compute_node_text_metrics(ch->root, pctx, 0);
+        gtk_widget_queue_draw(widget);
+    }
 }
 
 static void activate(GtkApplication *app, gpointer user_data) {
@@ -1571,6 +1607,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_hexpand(app_state->drawing_area, TRUE);
     gtk_widget_set_vexpand(app_state->drawing_area, TRUE);
     gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(app_state->drawing_area), on_draw, NULL, NULL);
+    g_signal_connect(app_state->drawing_area, "realize", G_CALLBACK(on_drawing_area_realize), NULL);
     gtk_overlay_set_child(GTK_OVERLAY(overlay), app_state->drawing_area);
 
     build_inline_popover(app_state->drawing_area);
@@ -1639,6 +1676,8 @@ static void activate(GtkApplication *app, gpointer user_data) {
     g_signal_connect(win_keys, "key-pressed", G_CALLBACK(on_window_key_pressed), NULL);
     gtk_widget_add_controller(app_state->window, win_keys);
 
+    g_signal_connect(app_state->window, "close-request", G_CALLBACK(on_window_close_request), NULL);
+    
     gtk_window_present(GTK_WINDOW(app_state->window));
     g_idle_add(initialize_app_state_cb, NULL);
 }
