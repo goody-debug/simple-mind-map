@@ -59,6 +59,10 @@ typedef struct {
     double pan_x;
     double pan_y;
     double zoom;
+    double pointer_x;
+    double pointer_y;
+    gboolean has_pointer;
+    double pinch_start_zoom;
     double drag_start_x;
     double drag_start_y;
     double drag_pan_start_x;
@@ -889,6 +893,15 @@ static MindNode *hit_test_node(MindNode *n, double world_x, double world_y) {
     return NULL;
 }
 
+static void update_editor_popover_position(void) {
+    if (app_state->editing_node && gtk_widget_get_visible(app_state->editor_popover)) {
+        double sx = app_state->editing_node->y * app_state->zoom + app_state->pan_x;
+        double sy = app_state->editing_node->x * app_state->zoom + app_state->pan_y;
+        GdkRectangle rect = { (int)sx, (int)sy, 24, 24 };
+        gtk_popover_set_pointing_to(GTK_POPOVER(app_state->editor_popover), &rect);
+    }
+}
+
 static void on_left_click(GtkGestureClick *gesture, int n_press, double x, double y, gpointer user_data) {
     if (hypot(x - app_state->drag_start_x, y - app_state->drag_start_y) > 5.0) return;
 
@@ -929,6 +942,7 @@ static void on_drag_begin(GtkGestureDrag *gesture, double start_x, double start_
 static void on_drag_update(GtkGestureDrag *gesture, double offset_x, double offset_y, gpointer user_data) {
     app_state->pan_x = app_state->drag_pan_start_x + offset_x;
     app_state->pan_y = app_state->drag_pan_start_y + offset_y;
+    update_editor_popover_position();
     gtk_widget_queue_draw(app_state->drawing_area);
 }
 
@@ -938,15 +952,53 @@ static void zoom_at_point(double factor, double center_x, double center_y) {
     app_state->pan_x = center_x - (center_x - app_state->pan_x) * actual_factor;
     app_state->pan_y = center_y - (center_y - app_state->pan_y) * actual_factor;
     app_state->zoom = new_zoom;
+    update_editor_popover_position();
     gtk_widget_queue_draw(app_state->drawing_area);
 }
 
+static void on_motion(GtkEventControllerMotion *ctrl, double x, double y, gpointer user_data) {
+    app_state->pointer_x = x;
+    app_state->pointer_y = y;
+    app_state->has_pointer = TRUE;
+}
+
 static gboolean on_scroll(GtkEventControllerScroll *ctrl, double dx, double dy, gpointer user_data) {
-    double w = gtk_widget_get_width(app_state->drawing_area) / 2.0;
-    double h = gtk_widget_get_height(app_state->drawing_area) / 2.0;
-    double factor = (dy < 0) ? 1.15 : (1.0 / 1.15);
-    zoom_at_point(factor, w, h);
+    double cx = app_state->has_pointer ? app_state->pointer_x : gtk_widget_get_width(app_state->drawing_area) / 2.0;
+    double cy = app_state->has_pointer ? app_state->pointer_y : gtk_widget_get_height(app_state->drawing_area) / 2.0;
+
+    GdkEvent *event = gtk_event_controller_get_current_event(GTK_EVENT_CONTROLLER(ctrl));
+    double factor = 1.0;
+
+#if GTK_CHECK_VERSION(4, 8, 0)
+    if (event && gdk_scroll_event_get_unit(event) == GDK_SCROLL_UNIT_SURFACE) {
+        // High-resolution pixel delta from trackpad two-finger scroll
+        factor = pow(1.003, -dy);
+    } else
+#endif
+    {
+        // Discrete wheel ticks or smooth value-unit deltas
+        double clamped_dy = CLAMP(dy, -2.5, 2.5);
+        factor = pow(1.08, -clamped_dy);
+    }
+
+    zoom_at_point(factor, cx, cy);
     return TRUE;
+}
+
+static void on_zoom_begin(GtkGesture *gesture, GdkEventSequence *sequence, gpointer user_data) {
+    app_state->pinch_start_zoom = app_state->zoom;
+}
+
+static void on_zoom_scale_changed(GtkGestureZoom *gesture, double scale, gpointer user_data) {
+    double cx = 0, cy = 0;
+    if (!gtk_gesture_get_bounding_box_center(GTK_GESTURE(gesture), &cx, &cy)) {
+        cx = app_state->has_pointer ? app_state->pointer_x : gtk_widget_get_width(app_state->drawing_area) / 2.0;
+        cy = app_state->has_pointer ? app_state->pointer_y : gtk_widget_get_height(app_state->drawing_area) / 2.0;
+    }
+
+    double target_zoom = CLAMP(app_state->pinch_start_zoom * scale, 0.15, 3.5);
+    double factor = target_zoom / app_state->zoom;
+    zoom_at_point(factor, cx, cy);
 }
 
 /* =========================================================================
@@ -1722,9 +1774,18 @@ static void activate(GtkApplication *app, gpointer user_data) {
     g_signal_connect(drag, "drag-update", G_CALLBACK(on_drag_update), NULL);
     gtk_widget_add_controller(app_state->drawing_area, GTK_EVENT_CONTROLLER(drag));
 
+    GtkEventController *motion_ctrl = gtk_event_controller_motion_new();
+    g_signal_connect(motion_ctrl, "motion", G_CALLBACK(on_motion), NULL);
+    gtk_widget_add_controller(app_state->drawing_area, motion_ctrl);
+
     GtkEventController *scroll_ctrl = gtk_event_controller_scroll_new(GTK_EVENT_CONTROLLER_SCROLL_VERTICAL);
     g_signal_connect(scroll_ctrl, "scroll", G_CALLBACK(on_scroll), NULL);
     gtk_widget_add_controller(app_state->drawing_area, scroll_ctrl);
+
+    GtkGesture *zoom_gesture = gtk_gesture_zoom_new();
+    g_signal_connect(zoom_gesture, "begin", G_CALLBACK(on_zoom_begin), NULL);
+    g_signal_connect(zoom_gesture, "scale-changed", G_CALLBACK(on_zoom_scale_changed), NULL);
+    gtk_widget_add_controller(app_state->drawing_area, GTK_EVENT_CONTROLLER(zoom_gesture));
 
     GtkEventController *win_keys = gtk_event_controller_key_new();
     g_signal_connect(win_keys, "key-pressed", G_CALLBACK(on_window_key_pressed), NULL);
