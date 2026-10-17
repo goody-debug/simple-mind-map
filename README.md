@@ -22,6 +22,7 @@ A lightning-fast, native mind mapping application built with **GTK 4**, **Libadw
 * **Rich Node Media**: Attach images directly to nodes via file dialog or clipboard paste (`Ctrl+V`), with adjustable image sizing.
 * **Keyboard & Modal Efficiency**: Quick branch creation (`Tab`), inline popover text editing, and full undo/redo history support (`Ctrl+Z` / `Ctrl+Y`).
 * **JSON Export/Import**: Easily backup, share, or port your mind maps as clean JSON files.
+* **An Web Version**: Don't have linux no problems, use the html version inside your browser.
 
 ---
 
