@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Simple Mind Map</title>
     
     <script src="d3.v7.min.js"></script>
@@ -29,30 +29,52 @@
 
         /* Basic Resets & Typography */
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
+        html, body {
+            height: 100%;
+            width: 100%;
             background-color: var(--adw-view);
             color: var(--adw-text);
             font-family: "Cartograph CF", Cantarell, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            overflow: hidden; 
+            overflow: hidden;
+            -webkit-tap-highlight-color: transparent;
         }
 
-        /* Layout Structure */
-        .layout-wrapper { display: flex; height: 100vh; width: 100vw; position: relative; overflow: hidden; }
+        /* Layout Structure - 100dvh prevents mobile browser bars from hiding the footer */
+        .layout-wrapper { 
+            display: flex; 
+            height: 100vh; 
+            height: 100dvh; 
+            width: 100vw; 
+            position: relative; 
+            overflow: hidden; 
+        }
         
         .mobile-overlay { position: fixed; inset: 0; background-color: rgba(0,0,0,0.6); backdrop-filter: blur(2px); z-index: 40; }
         
         /* Sidebar Styling & Desktop Collapse */
         .sidebar { 
-            width: 288px; min-width: 288px; display: flex; flex-direction: column; height: 100%; 
-            position: absolute; z-index: 50; transform: translateX(-100%); 
-            flex-shrink: 0; background-color: var(--adw-window); 
-            border-right: 1px solid var(--adw-border); transition: transform 0.3s ease, margin-left 0.3s ease; 
-            box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04);
+            width: 288px; 
+            max-width: 85vw;
+            display: flex; 
+            flex-direction: column; 
+            height: 100%; 
+            max-height: 100dvh;
+            position: fixed; 
+            top: 0;
+            left: 0;
+            bottom: 0;
+            z-index: 50; 
+            transform: translateX(-100%); 
+            flex-shrink: 0; 
+            background-color: var(--adw-window); 
+            border-right: 1px solid var(--adw-border); 
+            transition: transform 0.3s ease, margin-left 0.3s ease; 
+            box-shadow: 0 20px 25px -5px rgba(0,0,0,0.25), 0 10px 10px -5px rgba(0,0,0,0.1);
         }
         .sidebar.open { transform: translateX(0); }
         
         @media (min-width: 1024px) {
-            .sidebar { position: relative; transform: translateX(0); }
+            .sidebar { position: relative; transform: translateX(0); min-width: 288px; }
             .sidebar.collapsed { margin-left: -288px; transform: translateX(0) !important; }
         }
 
@@ -64,6 +86,7 @@
             align-items: center; 
             background-color: var(--adw-headerbar); 
             border-bottom: 1px solid var(--adw-border); 
+            flex-shrink: 0;
         }
         .sidebar-title { 
             font-size: 1.125rem; 
@@ -74,16 +97,31 @@
             text-overflow: ellipsis; 
             text-align: center;
         }
-        .sidebar-content { padding: 0.75rem; flex-grow: 1; overflow-y: auto; }
+        .sidebar-content { 
+            padding: 0.75rem; 
+            flex: 1 1 auto; 
+            min-height: 0; /* Critical for flex child scrolling so footer isn't pushed out */
+            overflow-y: auto; 
+            -webkit-overflow-scrolling: touch;
+        }
         .sidebar-list { list-style: none; display: flex; flex-direction: column; gap: 0.25rem; }
-        .sidebar-footer { padding: 0 0.75rem 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; }
+        .sidebar-footer { 
+            padding: 0.75rem; 
+            padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+            border-top: 1px solid var(--adw-border);
+            background-color: var(--adw-window);
+            display: flex; 
+            flex-direction: column; 
+            gap: 0.5rem; 
+            flex-shrink: 0;
+        }
 
         /* Chapter Buttons (Full-row clickable) */
         .chapter-btn-wrapper { 
             display: flex; 
             align-items: center; 
             justify-content: space-between; 
-            padding: 0.5rem 0.75rem; 
+            padding: 0.625rem 0.75rem; 
             border-radius: 6px; 
             color: var(--adw-text-dim); 
             transition: all 0.2s ease; 
@@ -122,23 +160,45 @@
         .adw-input { width: 100%; background-color: rgba(255, 255, 255, 0.05); border: 1px solid var(--adw-border); border-radius: 6px; color: var(--adw-text); padding: 0.625rem; transition: all 0.2s; font-size: 0.875rem; }
         .adw-input:focus { outline: none; border-color: var(--adw-accent); box-shadow: 0 0 0 2px rgba(136, 192, 208, 0.3); }
         
-        .adw-btn { background-color: rgba(255, 255, 255, 0.08); border: 1px solid transparent; border-radius: 6px; color: var(--adw-text); font-weight: 600; transition: all 0.2s; cursor: pointer; font-size: 0.875rem; display: inline-flex; align-items: center; justify-content: center; }
+        .adw-btn { background-color: rgba(255, 255, 255, 0.08); border: 1px solid transparent; border-radius: 6px; color: var(--adw-text); font-weight: 600; transition: all 0.2s; cursor: pointer; font-size: 0.875rem; display: inline-flex; align-items: center; justify-content: center; user-select: none; }
         .adw-btn:hover { background-color: rgba(255, 255, 255, 0.12); }
+        .adw-btn:active { transform: scale(0.98); }
         .adw-btn-primary { background-color: var(--adw-accent); color: white; }
         .adw-btn-primary:hover { background-color: var(--adw-accent-hover); }
-        .adw-btn-icon { padding: 0.375rem; }
+        .adw-btn-icon { padding: 0.5rem; }
         .adw-btn-icon svg { width: 1.25rem; height: 1.25rem; }
 
-        .btn-group { display: flex; gap: 0.5rem; }
-        .btn-group > button { flex: 1; flex-direction: column; padding: 0.375rem 0.5rem; font-size: 0.75rem; }
-        .btn-group svg { width: 1rem; height: 1rem; margin-bottom: 0.25rem; opacity: 0.7; }
-        .full-btn { width: 100%; padding: 0.5rem 1rem; margin-bottom: 0.5rem; box-shadow: 0 1px 2px 0 rgba(0,0,0,0.05); }
+        .btn-group { display: flex; gap: 0.5rem; width: 100%; }
+        .btn-group > button { flex: 1; flex-direction: column; padding: 0.5rem; font-size: 0.75rem; min-height: 48px; }
+        .btn-group svg { width: 1.125rem; height: 1.125rem; margin-bottom: 0.25rem; opacity: 0.85; }
+        .full-btn { width: 100%; padding: 0.625rem 1rem; box-shadow: 0 1px 2px 0 rgba(0,0,0,0.05); }
 
         /* Main View & Floating Controls */
         .main-view { flex: 1; position: relative; width: 100%; height: 100%; background-color: var(--adw-view); box-sizing: border-box; transition: all 0.3s; min-width: 0; }
         
-        .floating-sidebar-toggle { position: absolute; top: 1rem; left: 1rem; z-index: 30; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
-        .floating-toolbar { position: absolute; top: 1rem; right: 1rem; z-index: 30; display: flex; gap: 0.5rem; }
+        .floating-sidebar-toggle { position: absolute; top: 0.75rem; left: 0.75rem; z-index: 30; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.2); background-color: var(--adw-headerbar); }
+        .floating-toolbar { position: absolute; top: 0.75rem; right: 0.75rem; z-index: 30; display: flex; gap: 0.375rem; }
+        .floating-toolbar .adw-btn-icon { background-color: var(--adw-headerbar); box-shadow: 0 4px 6px -1px rgba(0,0,0,0.2); }
+
+        .mobile-hint {
+            position: absolute;
+            bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: rgba(59, 66, 82, 0.85);
+            backdrop-filter: blur(4px);
+            border: 1px solid var(--adw-border);
+            color: var(--adw-text-dim);
+            padding: 0.35rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            pointer-events: none;
+            z-index: 20;
+            white-space: nowrap;
+        }
+        @media (min-width: 1024px) {
+            .mobile-hint { display: none; }
+        }
 
         /* Modal Structure */
         .modal-overlay { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; background-color: rgba(0,0,0,0.5); backdrop-filter: blur(4px); }
@@ -149,11 +209,11 @@
         .modal-actions button { flex: 1; padding: 0.5rem 0; }
 
         /* Inline Editor */
-        .inline-editor { position: absolute; display: flex; flex-direction: column; gap: 0.35rem; z-index: 150; }
-        .inline-textarea { background-color: var(--adw-window); color: var(--adw-text); padding: 0.5rem; border-radius: 0.5rem; border: 2px solid var(--adw-accent); outline: none; resize: none; overflow: hidden; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25); font-size: 13.5px; line-height: 1.3; font-family: inherit; min-width: 120px; }
+        .inline-editor { position: fixed; display: flex; flex-direction: column; gap: 0.35rem; z-index: 150; max-width: calc(100vw - 16px); }
+        .inline-textarea { background-color: var(--adw-window); color: var(--adw-text); padding: 0.5rem; border-radius: 0.5rem; border: 2px solid var(--adw-accent); outline: none; resize: none; overflow: hidden; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25); font-size: 14px; line-height: 1.3; font-family: inherit; min-width: 140px; max-width: calc(100vw - 16px); }
         
-        .inline-toolbar { display: flex; align-items: center; gap: 0.25rem; background-color: var(--adw-popover); border: 1px solid var(--adw-border); padding: 0.35rem; border-radius: 0.5rem; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.2); width: max-content; }
-        .inline-toolbar button { display: flex; align-items: center; gap: 0.375rem; padding: 0.375rem 0.5rem; border-radius: 0.375rem; font-size: 0.75rem; font-weight: 600; transition: background-color 0.2s, color 0.2s; background: transparent; border: none; cursor: pointer; }
+        .inline-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem; background-color: var(--adw-popover); border: 1px solid var(--adw-border); padding: 0.35rem; border-radius: 0.5rem; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.2); width: max-content; max-width: calc(100vw - 16px); }
+        .inline-toolbar button { display: flex; align-items: center; gap: 0.375rem; padding: 0.4rem 0.5rem; border-radius: 0.375rem; font-size: 0.75rem; font-weight: 600; transition: background-color 0.2s, color 0.2s; background: transparent; border: none; cursor: pointer; }
         
         .inline-toolbar svg { width: 15px; height: 15px; } 
         
@@ -166,10 +226,10 @@
         .inline-toolbar button.destructive { color: var(--adw-destructive); }
         .inline-toolbar button.destructive:hover { background-color: rgba(255,255,255,0.1); }
         
-        .inline-toolbar .divider { width: 1px; height: 1.25rem; background-color: var(--adw-border); margin: 0 0.25rem; }
+        .inline-toolbar .divider { width: 1px; height: 1.25rem; background-color: var(--adw-border); margin: 0 0.15rem; }
 
         /* Toast */
-        .toast { position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%); padding: 0.625rem 1.25rem; border-radius: 9999px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); z-index: 200; transition: opacity 0.3s; opacity: 0; pointer-events: none; font-size: 0.875rem; font-weight: 500; letter-spacing: 0.025em; }
+        .toast { position: fixed; bottom: 2.5rem; left: 50%; transform: translateX(-50%); padding: 0.625rem 1.25rem; border-radius: 9999px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.2); z-index: 200; transition: opacity 0.3s; opacity: 0; pointer-events: none; font-size: 0.875rem; font-weight: 500; letter-spacing: 0.025em; white-space: nowrap; }
         .toast.success { background-color: var(--adw-success); color: var(--adw-view); }
         .toast.error { background-color: var(--adw-destructive); color: var(--adw-text); }
         
@@ -190,6 +250,8 @@
             height: 100%;
             display: block;
             touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
         }
 
         .node circle { transition: stroke-width 0.2s, filter 0.2s, r 0.2s; }
@@ -204,7 +266,11 @@
             letter-spacing: 0.1px; 
         }
 
-        .node image { clip-path: inset(0% round 8px); opacity: 0.95; transition: opacity 0.2s, width 0.4s, height 0.4s, x 0.4s, y 0.4s; }
+        /* Uncropped image styling */
+        .node image { 
+            opacity: 0.95; 
+            transition: opacity 0.2s, width 0.4s, height 0.4s, x 0.4s, y 0.4s; 
+        }
         .node:hover image { opacity: 1; }
 
         .link { fill: none; transition: stroke-width 0.3s; }
@@ -238,7 +304,7 @@
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
                     Import
                 </button>
-                <input type="file" id="import-file" class="hidden" accept=".json" onchange="importMap(event)">
+                <input type="file" id="import-file" class="hidden" accept=".json,application/json" onchange="importMap(event)">
             </div>
         </div>
     </aside>
@@ -263,6 +329,8 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 7v6h-6"></path><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3l3 2.7"></path></svg>
             </button>
         </div>
+
+        <div class="mobile-hint">Tap to expand • Double-tap or hold node to edit</div>
 
         <div id="map-container"></div>
     </main>
@@ -290,10 +358,9 @@
                   onpaste="handlePaste(event)"></textarea>
         
         <div class="inline-toolbar" onmousedown="event.preventDefault()">
-            <button onclick="closeNodeEditor()" class="destructive" title="Close Editor">
+            <button onclick="closeNodeEditor()" class="destructive" title="Save & Close Editor">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <line x1="18" y1="6" x2="6" y2="18"></line>
-                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                    <polyline points="20 6 9 17 4 12"></polyline>
                 </svg>
             </button>
             <div class="divider"></div>
@@ -390,6 +457,34 @@
             if (!d.id) d.id = 'node_' + Math.random().toString(36).substr(2, 9);
             if (d.children) d.children.forEach(ensureDataIds);
             if (d._children) d._children.forEach(ensureDataIds);
+        }
+
+        // Helper to compute exact width & height while preserving aspect ratio (no cropping)
+        function getNodeImageDimensions(d) {
+            if (!d.data.image) return { width: 0, height: 0 };
+            const baseSize = d.data.imageSize || (d.depth === 0 ? 56 : 40);
+            const aspect = d.data.imageAspect || 1;
+            if (aspect >= 1) {
+                return { width: baseSize * aspect, height: baseSize };
+            } else {
+                return { width: baseSize, height: baseSize / aspect };
+            }
+        }
+
+        // Backfill natural aspect ratio for any existing images that don't have it stored yet
+        function ensureImageAspects(nodeData, onUpdate) {
+            if (nodeData.image && !nodeData.imageAspect) {
+                const img = new Image();
+                img.onload = () => {
+                    if (img.naturalHeight > 0) {
+                        nodeData.imageAspect = img.naturalWidth / img.naturalHeight;
+                        if (onUpdate) onUpdate();
+                    }
+                };
+                img.src = nodeData.image;
+            }
+            if (nodeData.children) nodeData.children.forEach(c => ensureImageAspects(c, onUpdate));
+            if (nodeData._children) nodeData._children.forEach(c => ensureImageAspects(c, onUpdate));
         }
 
         let chapters = [];
@@ -634,7 +729,11 @@
             initSidebar();
             const chapter = chapters.find(c => c.id === id);
             if(chapter) {
-                ensureDataIds(chapter.dataset); 
+                ensureDataIds(chapter.dataset);
+                ensureImageAspects(chapter.dataset, () => {
+                    localStorage.setItem('nordBioMaps', JSON.stringify(chapters));
+                    refreshMap(chapter.dataset);
+                });
                 setupD3();
                 rootData = d3.hierarchy(chapter.dataset);
                 
@@ -659,6 +758,7 @@
             }
         }
 
+        // Clamp editor coordinates so it stays on screen on mobile devices
         function updateEditorPosition() {
             if (!activeD3Node) return;
             const editorContainer = document.getElementById('inline-editor-container');
@@ -671,8 +771,26 @@
             if (!textEl) return;
             
             const rect = textEl.getBoundingClientRect();
-            editorContainer.style.left = (rect.left - 8) + 'px'; 
-            editorContainer.style.top = (rect.top - 8) + 'px';
+            const editorRect = editorContainer.getBoundingClientRect();
+            
+            const vw = window.innerWidth;
+            const vh = window.innerHeight;
+            
+            let left = rect.left - 8;
+            let top = rect.top - 8;
+            
+            if (left + editorRect.width > vw - 8) {
+                left = vw - editorRect.width - 8;
+            }
+            if (left < 8) left = 8;
+
+            if (top + editorRect.height > vh - 8) {
+                top = vh - editorRect.height - 8;
+            }
+            if (top < 8) top = 8;
+
+            editorContainer.style.left = left + 'px'; 
+            editorContainer.style.top = top + 'px';
         }
 
         function autoResizeTextarea(el) {
@@ -709,7 +827,8 @@
             
             const rect = textEl.getBoundingClientRect();
             textarea.value = d.data.name || "";
-            textarea.style.width = Math.max(rect.width + 16, 200) + 'px';
+            const maxAllowedWidth = window.innerWidth - 24;
+            textarea.style.width = Math.min(Math.max(rect.width + 16, 200), maxAllowedWidth) + 'px';
             
             d3.select(textEl).style("visibility", "hidden");
             editorContainer.classList.remove('hidden');
@@ -745,6 +864,31 @@
             }
         }
 
+        function applyImageWithAspect(dataUrl) {
+            if (!activeD3Node) return;
+            const img = new Image();
+            img.onload = function() {
+                if (!activeD3Node) return;
+                activeD3Node.data.image = dataUrl;
+                activeD3Node.data.imageAspect = img.naturalHeight > 0 ? (img.naturalWidth / img.naturalHeight) : 1;
+                activeD3Node.data.imageSize = activeD3Node.depth === 0 ? 56 : 40; 
+                
+                const textarea = document.getElementById('inline-text-editor');
+                if (textarea.value.trim() && activeD3Node.data.name !== textarea.value.trim()) {
+                    activeD3Node.data.name = textarea.value.trim();
+                }
+
+                saveChapters();
+                refreshMap(activeD3Node.data);
+                
+                document.getElementById('inline-btn-remove-img').classList.remove('hidden');
+                document.getElementById('inline-btn-img-minus').classList.remove('hidden');
+                document.getElementById('inline-btn-img-plus').classList.remove('hidden');
+                setTimeout(() => updateEditorPosition(), 460);
+            };
+            img.src = dataUrl;
+        }
+
         function handlePaste(event) {
             if (!activeD3Node) return;
             const clipboardData = event.clipboardData || window.clipboardData;
@@ -756,23 +900,8 @@
                     event.preventDefault(); 
                     const file = item.getAsFile();
                     const reader = new FileReader();
-                    
                     reader.onload = function(e) {
-                        activeD3Node.data.image = e.target.result;
-                        activeD3Node.data.imageSize = activeD3Node.depth === 0 ? 56 : 40; 
-                        
-                        const textarea = document.getElementById('inline-text-editor');
-                        if (textarea.value.trim() && activeD3Node.data.name !== textarea.value.trim()) {
-                            activeD3Node.data.name = textarea.value.trim();
-                        }
-
-                        saveChapters();
-                        refreshMap(activeD3Node.data);
-                        
-                        document.getElementById('inline-btn-remove-img').classList.remove('hidden');
-                        document.getElementById('inline-btn-img-minus').classList.remove('hidden');
-                        document.getElementById('inline-btn-img-plus').classList.remove('hidden');
-                        setTimeout(() => updateEditorPosition(), 460);
+                        applyImageWithAspect(e.target.result);
                     };
                     reader.readAsDataURL(file);
                     return; 
@@ -794,8 +923,7 @@
         }
 
         function calculateNodeContentHeight(d) {
-            const hasImage = !!d.data.image;
-            const imgSize = hasImage ? (d.data.imageSize || (d.depth === 0 ? 56 : 40)) : 0;
+            const { height: imgHeight } = getNodeImageDimensions(d);
             
             const rawText = d.data.name || "";
             let rawWords = rawText.split(/\s+/).filter(w => w.length > 0);
@@ -823,15 +951,15 @@
             }
             
             const textHeight = lineNumber * 22; 
-            return Math.max(imgSize, textHeight) + 60; 
+            return Math.max(imgHeight, textHeight) + 60; 
         }
 
         function calculateNodeContentWidth(d) {
             if (d.depth === 0) return 160;
 
             const hasImage = !!d.data.image;
-            const imgSize = hasImage ? (d.data.imageSize || 40) : 0;
-            const textStartX = hasImage ? (15 + imgSize + 10) : 20;
+            const { width: imgWidth } = getNodeImageDimensions(d);
+            const textStartX = hasImage ? (15 + imgWidth + 10) : 20;
 
             const rawText = d.data.name || "";
             let rawWords = rawText.split(/\s+/).filter(w => w.length > 0);
@@ -1001,22 +1129,7 @@
             if (!file || !activeD3Node) return;
             const reader = new FileReader();
             reader.onload = function(e) {
-                activeD3Node.data.image = e.target.result;
-                activeD3Node.data.imageSize = activeD3Node.depth === 0 ? 56 : 40; 
-                
-                const textarea = document.getElementById('inline-text-editor');
-                const newText = textarea.value.trim();
-                if (activeD3Node.data.name !== newText) {
-                    activeD3Node.data.name = newText;
-                }
-
-                saveChapters();
-                refreshMap(activeD3Node.data);
-                
-                document.getElementById('inline-btn-remove-img').classList.remove('hidden');
-                document.getElementById('inline-btn-img-minus').classList.remove('hidden');
-                document.getElementById('inline-btn-img-plus').classList.remove('hidden');
-                setTimeout(() => updateEditorPosition(), 460);
+                applyImageWithAspect(e.target.result);
             };
             reader.readAsDataURL(file);
             event.target.value = ''; 
@@ -1026,6 +1139,7 @@
             if (activeD3Node) {
                 delete activeD3Node.data.image;
                 delete activeD3Node.data.imageSize;
+                delete activeD3Node.data.imageAspect;
                 
                 const textarea = document.getElementById('inline-text-editor');
                 const newText = textarea.value.trim();
@@ -1071,13 +1185,13 @@
                 
                 const isRoot = d.depth === 0;
                 const hasImage = !!d.data.image;
-                const imgSize = d.data.imageSize || (isRoot ? 56 : 40);
+                const { width: imgWidth } = getNodeImageDimensions(d);
                 
                 let x = 0;
                 if (isRoot) {
-                    x = hasImage ? -15 - imgSize - 10 : -20;
+                    x = hasImage ? -15 - imgWidth - 10 : -20;
                 } else {
-                    x = hasImage ? 15 + imgSize + 10 : 20; 
+                    x = hasImage ? 15 + imgWidth + 10 : 20; 
                 }
                 
                 textElement.attr("text-anchor", isRoot ? "end" : "start");
@@ -1132,22 +1246,29 @@
                 .scaleExtent([0.1, 3])
                 .filter((event) => {
                     if (event.type === 'wheel') return true;
-                    return !event.button;
+                    if (event.type.startsWith('touch')) return true;
+                    return !event.button && event.type !== 'dblclick';
                 })
                 .on("zoom", (event) => {
                     g.attr("transform", event.transform);
                     updateEditorPosition(); 
                 });
 
-            svg.call(zoom);
+            svg.call(zoom).on("dblclick.zoom", null);
 
             svg.on("wheel", (event) => {
                 event.preventDefault();
             });
             
-            const initialTransform = d3.zoomIdentity.translate(280, height / 2).scale(0.85);
+            const isMobile = window.innerWidth < 768;
+            const initialX = isMobile ? Math.min(200, width * 0.55) : 280;
+            const initialScale = isMobile ? 0.72 : 0.85;
+            const initialTransform = d3.zoomIdentity.translate(initialX, height / 2).scale(initialScale);
             svg.call(zoom.transform, initialTransform);
         }
+
+        let lastTapTime = 0;
+        let lastTapNodeId = null;
 
         function updateD3(source) {
             const duration = 450;
@@ -1164,6 +1285,18 @@
                 .attr("transform", d => `translate(${source.y0},${source.x0})`)
                 .on("click", function(event, d) {
                     event.stopPropagation();
+                    
+                    // Mobile & desktop double-tap / double-click detection to open editor
+                    const now = Date.now();
+                    if (lastTapNodeId === d.data.id && (now - lastTapTime) < 320) {
+                        lastTapTime = 0;
+                        lastTapNodeId = null;
+                        openNodeEditor(event, d, this);
+                        return;
+                    }
+                    lastTapTime = now;
+                    lastTapNodeId = d.data.id;
+
                     closeNodeEditor(); 
                     
                     if (d.children || d._children) {
@@ -1212,20 +1345,21 @@
                 }) 
                 .call(wrapNodeText);
             
+            // Render uncropped image with exact aspect ratio
             nodeUpdate.select("image")
                 .attr("href", d => d.data.image || null)
                 .attr("x", d => {
                     const isRoot = d.depth === 0;
-                    const s = d.data.imageSize || (isRoot ? 56 : 40);
-                    return isRoot ? -15 - s : 15;
+                    const { width } = getNodeImageDimensions(d);
+                    return isRoot ? -15 - width : 15;
                 })
                 .attr("y", d => {
-                    const s = d.data.imageSize || (d.depth === 0 ? 56 : 40);
-                    return -(s/2);
+                    const { height } = getNodeImageDimensions(d);
+                    return -(height / 2);
                 })
-                .attr("width", d => d.data.imageSize || (d.depth === 0 ? 56 : 40))
-                .attr("height", d => d.data.imageSize || (d.depth === 0 ? 56 : 40))
-                .attr("preserveAspectRatio", "xMidYMid slice")
+                .attr("width", d => getNodeImageDimensions(d).width)
+                .attr("height", d => getNodeImageDimensions(d).height)
+                .attr("preserveAspectRatio", "xMidYMid meet")
                 .style("display", d => d.data.image ? "block" : "none")
                 .style("opacity", 1);
 
@@ -1281,6 +1415,7 @@
                 if (window.innerWidth >= 1024) {
                     document.getElementById('overlay').classList.add('hidden');
                 }
+                updateEditorPosition();
             });
         });
 
