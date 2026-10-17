@@ -1,0 +1,1313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple Mind Map</title>
+    
+    <script src="d3.v7.min.js"></script>
+    
+    <style>
+        :root {
+            /* Backgrounds (Polar Night) */
+            --adw-window: #3b4252;
+            --adw-view: #2e3440;
+            --adw-headerbar: #434c5e;
+            --adw-card: #4c566a;
+            --adw-popover: #3b4252;
+            /* Accents & States (Frost & Aurora) */
+            --adw-accent: #88c0d0;
+            --adw-accent-hover: #81a1c1;
+            --adw-destructive: #bf616a;
+            --adw-destructive-hover: #d08770;
+            --adw-success: #a3be8c;
+            /* Text & Borders (Snow Storm) */
+            --adw-text: #eceff4;
+            --adw-text-dim: #d8dee9;
+            --adw-border: #4c566a;
+        }
+
+        /* Basic Resets & Typography */
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background-color: var(--adw-view);
+            color: var(--adw-text);
+            font-family: "Cartograph CF", Cantarell, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            overflow: hidden; 
+        }
+
+        /* Layout Structure */
+        .layout-wrapper { display: flex; height: 100vh; width: 100vw; position: relative; overflow: hidden; }
+        
+        .mobile-overlay { position: fixed; inset: 0; background-color: rgba(0,0,0,0.6); backdrop-filter: blur(2px); z-index: 40; }
+        
+        /* Sidebar Styling & Desktop Collapse */
+        .sidebar { 
+            width: 288px; min-width: 288px; display: flex; flex-direction: column; height: 100%; 
+            position: absolute; z-index: 50; transform: translateX(-100%); 
+            flex-shrink: 0; background-color: var(--adw-window); 
+            border-right: 1px solid var(--adw-border); transition: transform 0.3s ease, margin-left 0.3s ease; 
+            box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04);
+        }
+        .sidebar.open { transform: translateX(0); }
+        
+        @media (min-width: 1024px) {
+            .sidebar { position: relative; transform: translateX(0); }
+            .sidebar.collapsed { margin-left: -288px; transform: translateX(0) !important; }
+        }
+
+        /* Center aligned sidebar header */
+        .sidebar-header { 
+            padding: 1rem; 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            background-color: var(--adw-headerbar); 
+            border-bottom: 1px solid var(--adw-border); 
+        }
+        .sidebar-title { 
+            font-size: 1.125rem; 
+            font-weight: bold; 
+            letter-spacing: 0.025em; 
+            white-space: nowrap; 
+            overflow: hidden; 
+            text-overflow: ellipsis; 
+            text-align: center;
+        }
+        .sidebar-content { padding: 0.75rem; flex-grow: 1; overflow-y: auto; }
+        .sidebar-list { list-style: none; display: flex; flex-direction: column; gap: 0.25rem; }
+        .sidebar-footer { padding: 0 0.75rem 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; }
+
+        /* Chapter Buttons (Full-row clickable) */
+        .chapter-btn-wrapper { 
+            display: flex; 
+            align-items: center; 
+            justify-content: space-between; 
+            padding: 0.5rem 0.75rem; 
+            border-radius: 6px; 
+            color: var(--adw-text-dim); 
+            transition: all 0.2s ease; 
+            cursor: pointer;
+            user-select: none;
+        }
+        .chapter-btn-wrapper:hover { background-color: rgba(255, 255, 255, 0.05); color: var(--adw-text); }
+        .chapter-btn-wrapper.active { background-color: rgba(255, 255, 255, 0.1); color: var(--adw-text); font-weight: 600; }
+        .chapter-btn-text { 
+            flex-grow: 1; 
+            text-align: left; 
+            overflow: hidden; 
+            text-overflow: ellipsis; 
+            white-space: nowrap; 
+            font-size: 0.875rem; 
+            font-weight: inherit; 
+            color: inherit; 
+        }
+        .chapter-btn-delete { 
+            background: transparent; 
+            border: none; 
+            color: #d8dee9; 
+            padding: 0.375rem; 
+            margin-left: 0.5rem; 
+            border-radius: 0.375rem; 
+            cursor: pointer; 
+            transition: all 0.2s; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+        }
+        .chapter-btn-delete:hover { color: #bf616a; background-color: rgba(255,255,255,0.1); }
+        .chapter-btn-delete svg { width: 1rem; height: 1rem; }
+
+        /* General Buttons & Inputs */
+        .adw-input { width: 100%; background-color: rgba(255, 255, 255, 0.05); border: 1px solid var(--adw-border); border-radius: 6px; color: var(--adw-text); padding: 0.625rem; transition: all 0.2s; font-size: 0.875rem; }
+        .adw-input:focus { outline: none; border-color: var(--adw-accent); box-shadow: 0 0 0 2px rgba(136, 192, 208, 0.3); }
+        
+        .adw-btn { background-color: rgba(255, 255, 255, 0.08); border: 1px solid transparent; border-radius: 6px; color: var(--adw-text); font-weight: 600; transition: all 0.2s; cursor: pointer; font-size: 0.875rem; display: inline-flex; align-items: center; justify-content: center; }
+        .adw-btn:hover { background-color: rgba(255, 255, 255, 0.12); }
+        .adw-btn-primary { background-color: var(--adw-accent); color: white; }
+        .adw-btn-primary:hover { background-color: var(--adw-accent-hover); }
+        .adw-btn-icon { padding: 0.375rem; }
+        .adw-btn-icon svg { width: 1.25rem; height: 1.25rem; }
+
+        .btn-group { display: flex; gap: 0.5rem; }
+        .btn-group > button { flex: 1; flex-direction: column; padding: 0.375rem 0.5rem; font-size: 0.75rem; }
+        .btn-group svg { width: 1rem; height: 1rem; margin-bottom: 0.25rem; opacity: 0.7; }
+        .full-btn { width: 100%; padding: 0.5rem 1rem; margin-bottom: 0.5rem; box-shadow: 0 1px 2px 0 rgba(0,0,0,0.05); }
+
+        /* Main View & Floating Controls */
+        .main-view { flex: 1; position: relative; width: 100%; height: 100%; background-color: var(--adw-view); box-sizing: border-box; transition: all 0.3s; min-width: 0; }
+        
+        .floating-sidebar-toggle { position: absolute; top: 1rem; left: 1rem; z-index: 30; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+        .floating-toolbar { position: absolute; top: 1rem; right: 1rem; z-index: 30; display: flex; gap: 0.5rem; }
+
+        /* Modal Structure */
+        .modal-overlay { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; background-color: rgba(0,0,0,0.5); backdrop-filter: blur(4px); }
+        .modal-box { background-color: var(--adw-popover); padding: 1.5rem; border-radius: 0.75rem; width: 91.666%; max-width: 24rem; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25); border: 1px solid var(--adw-border); }
+        .modal-title { font-size: 1.125rem; font-weight: bold; margin-bottom: 1rem; text-align: center; }
+        .modal-error { color: var(--adw-destructive); font-size: 0.875rem; margin-bottom: 1rem; font-weight: 500; text-align: center; }
+        .modal-actions { display: flex; justify-content: space-between; gap: 0.75rem; margin-top: 0.5rem; }
+        .modal-actions button { flex: 1; padding: 0.5rem 0; }
+
+        /* Inline Editor */
+        .inline-editor { position: absolute; display: flex; flex-direction: column; gap: 0.35rem; z-index: 150; }
+        .inline-textarea { background-color: var(--adw-window); color: var(--adw-text); padding: 0.5rem; border-radius: 0.5rem; border: 2px solid var(--adw-accent); outline: none; resize: none; overflow: hidden; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25); font-size: 13.5px; line-height: 1.3; font-family: inherit; min-width: 120px; }
+        
+        .inline-toolbar { display: flex; align-items: center; gap: 0.25rem; background-color: var(--adw-popover); border: 1px solid var(--adw-border); padding: 0.35rem; border-radius: 0.5rem; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.2); width: max-content; }
+        .inline-toolbar button { display: flex; align-items: center; gap: 0.375rem; padding: 0.375rem 0.5rem; border-radius: 0.375rem; font-size: 0.75rem; font-weight: 600; transition: background-color 0.2s, color 0.2s; background: transparent; border: none; cursor: pointer; }
+        
+        .inline-toolbar svg { width: 15px; height: 15px; } 
+        
+        .inline-toolbar button.dim { color: var(--adw-text-dim); }
+        .inline-toolbar button.dim:hover { color: white; background-color: rgba(255,255,255,0.1); }
+        
+        .inline-toolbar button.accent { color: var(--adw-accent); }
+        .inline-toolbar button.accent:hover { background-color: rgba(255,255,255,0.1); }
+        
+        .inline-toolbar button.destructive { color: var(--adw-destructive); }
+        .inline-toolbar button.destructive:hover { background-color: rgba(255,255,255,0.1); }
+        
+        .inline-toolbar .divider { width: 1px; height: 1.25rem; background-color: var(--adw-border); margin: 0 0.25rem; }
+
+        /* Toast */
+        .toast { position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%); padding: 0.625rem 1.25rem; border-radius: 9999px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); z-index: 200; transition: opacity 0.3s; opacity: 0; pointer-events: none; font-size: 0.875rem; font-weight: 500; letter-spacing: 0.025em; }
+        .toast.success { background-color: var(--adw-success); color: var(--adw-view); }
+        .toast.error { background-color: var(--adw-destructive); color: var(--adw-text); }
+        
+        .hidden { display: none !important; }
+
+        /* D3 SVG Canvas */
+        #map-container { 
+            cursor: grab; 
+            width: 100%; 
+            height: 100%; 
+            overflow: hidden; 
+            position: relative;
+            touch-action: none;
+        }
+        #map-container:active { cursor: grabbing; }
+        #map-container svg {
+            width: 100%;
+            height: 100%;
+            display: block;
+            touch-action: none;
+        }
+
+        .node circle { transition: stroke-width 0.2s, filter 0.2s, r 0.2s; }
+        .node circle:hover { stroke-width: 4.5px !important; filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.3)); }
+
+        .node text { 
+            font-size: 13.5px; 
+            fill: var(--adw-text); 
+            pointer-events: none; 
+            text-shadow: none; 
+            font-family: "Cartograph CF", Cantarell, -apple-system, sans-serif; 
+            letter-spacing: 0.1px; 
+        }
+
+        .node image { clip-path: inset(0% round 8px); opacity: 0.95; transition: opacity 0.2s, width 0.4s, height 0.4s, x 0.4s, y 0.4s; }
+        .node:hover image { opacity: 1; }
+
+        .link { fill: none; transition: stroke-width 0.3s; }
+    </style>
+</head>
+<body class="layout-wrapper">
+
+    <!-- Mobile Overlay -->
+    <div id="overlay" class="mobile-overlay hidden" onclick="toggleSidebar()"></div>
+
+    <!-- Sidebar (Starts collapsed by default) -->
+    <aside id="sidebar" class="sidebar collapsed">
+        <div class="sidebar-header">
+            <h1 class="sidebar-title">Simple Mind Map</h1>
+        </div>
+        
+        <div class="sidebar-content">
+            <ul id="chapter-list" class="sidebar-list"></ul>
+        </div>
+        
+        <div class="sidebar-footer">
+            <button onclick="openModal()" class="adw-btn full-btn">
+                + Add Custom Map
+            </button>
+            <div class="btn-group">
+                <button onclick="exportMap()" class="adw-btn" title="Save current map to your device">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                    Export
+                </button>
+                <button onclick="document.getElementById('import-file').click()" class="adw-btn" title="Open a map from your device">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
+                    Import
+                </button>
+                <input type="file" id="import-file" class="hidden" accept=".json" onchange="importMap(event)">
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main View -->
+    <main id="main-view" class="main-view">
+        <button onclick="toggleSidebar()" class="adw-btn adw-btn-icon floating-sidebar-toggle" title="Toggle Sidebar">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
+        </button>
+
+        <div class="floating-toolbar">
+            <button onclick="zoomIn()" class="adw-btn adw-btn-icon" title="Zoom In (Ctrl +)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            </button>
+            <button onclick="zoomOut()" class="adw-btn adw-btn-icon" title="Zoom Out (Ctrl -)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            </button>
+            <button onclick="undo()" class="adw-btn adw-btn-icon" title="Undo (Ctrl+Z)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"></path><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"></path></svg>
+            </button>
+            <button onclick="redo()" class="adw-btn adw-btn-icon" title="Redo (Ctrl+Y)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 7v6h-6"></path><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3l3 2.7"></path></svg>
+            </button>
+        </div>
+
+        <div id="map-container"></div>
+    </main>
+
+    <!-- Add Map Modal -->
+    <div id="add-map-modal" class="modal-overlay hidden">
+        <div class="modal-box">
+            <h3 class="modal-title">New Map</h3>
+            <input id="map-title" type="text" placeholder="Map Title..." style="margin-bottom: 1.25rem;" class="adw-input">
+            <div class="modal-error" id="json-error">Title required</div>
+            <div class="modal-actions">
+                <button onclick="closeModal()" class="adw-btn">Cancel</button>
+                <button onclick="saveCustomMap()" class="adw-btn adw-btn-primary">Create</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Inline Editor Container -->
+    <div id="inline-editor-container" class="inline-editor hidden">
+        <textarea id="inline-text-editor" 
+                  class="inline-textarea" 
+                  rows="1" 
+                  oninput="autoResizeTextarea(this)" 
+                  onkeydown="handleInlineKey(event)"
+                  onpaste="handlePaste(event)"></textarea>
+        
+        <div class="inline-toolbar" onmousedown="event.preventDefault()">
+            <button onclick="closeNodeEditor()" class="destructive" title="Close Editor">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+            </button>
+            <div class="divider"></div>
+            
+            <button onclick="document.getElementById('node-image-upload').click()" class="dim" title="Add / Change Image (or Ctrl+V)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                    <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                    <polyline points="21 15 16 10 5 21"></polyline>
+                </svg>
+            </button>
+            
+            <button id="inline-btn-img-minus" onclick="resizeNodeImage(-20)" class="dim hidden" title="Decrease Image Size">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                    <line x1="8" y1="11" x2="14" y2="11"></line>
+                </svg>
+            </button>
+            
+            <button id="inline-btn-img-plus" onclick="resizeNodeImage(20)" class="dim hidden" title="Increase Image Size">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                    <line x1="11" y1="8" x2="11" y2="14"></line>
+                    <line x1="8" y1="11" x2="14" y2="11"></line>
+                </svg>
+            </button>
+            
+            <button id="inline-btn-remove-img" onclick="removeNodeImage()" class="destructive hidden" title="Remove Image">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                    <line x1="9" y1="9" x2="15" y2="15"></line>
+                    <line x1="15" y1="9" x2="9" y2="15"></line>
+                </svg>
+            </button>
+            
+            <div class="divider"></div>
+            
+            <button onclick="addChildNode()" class="accent" title="Add Branch (Tab)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="6" y1="3" x2="6" y2="15"></line>
+                    <circle cx="18" cy="6" r="3"></circle>
+                    <circle cx="6" cy="18" r="3"></circle>
+                    <path d="M18 9a9 9 0 0 1-9 9"></path>
+                </svg>
+                Branch
+            </button>
+            
+            <button id="inline-btn-delete" onclick="deleteNodeData()" class="destructive" title="Delete Node">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="3 6 5 6 21 6"></polyline>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                    <line x1="10" y1="11" x2="10" y2="17"></line>
+                    <line x1="14" y1="11" x2="14" y2="17"></line>
+                </svg>
+            </button>
+            
+            <div class="divider"></div>
+            
+            <button onclick="closeNodeEditor()" class="dim" title="Close Menu (Esc)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+            </button>
+        </div>
+        <input type="file" id="node-image-upload" class="hidden" accept="image/*" onchange="uploadNodeImage(event)">
+    </div>
+
+    <!-- Notification Toast -->
+    <div id="toast-msg" class="toast"></div>
+
+    <script type="module">
+        const defaultChapter = {
+            id: "breathing_exchange",
+            title: "Breathing & Exchange of Gases",
+            dataset: {
+                name: "Breathing & Exchange of Gases",
+                children: [
+                    {
+                        name: "1. Respiratory Organs",
+                        children: [
+                            { name: "Sponges, Coelenterates, Flatworms (Entire body surface / Simple diffusion)" },
+                            { name: "Earthworms (Moist cuticle)" },
+                            { name: "Insects (Network of Tracheal tubes)" }
+                        ]
+                    }
+                ]
+            }
+        };
+
+        function ensureDataIds(d) {
+            if (!d.id) d.id = 'node_' + Math.random().toString(36).substr(2, 9);
+            if (d.children) d.children.forEach(ensureDataIds);
+            if (d._children) d._children.forEach(ensureDataIds);
+        }
+
+        let chapters = [];
+        let activeChapterId = localStorage.getItem('nordBioActiveChapterId') || "breathing_exchange";
+        let history = [];
+        let historyIndex = -1;
+
+        function commitHistory() {
+            const currentState = JSON.stringify(chapters);
+            if (historyIndex >= 0 && currentState === JSON.stringify(history[historyIndex])) return;
+            history = history.slice(0, historyIndex + 1);
+            history.push(JSON.parse(currentState));
+            if (history.length > 50) history.shift();
+            else historyIndex++;
+        }
+
+        function undo() {
+            if (historyIndex > 0) {
+                historyIndex--;
+                chapters = JSON.parse(JSON.stringify(history[historyIndex]));
+                localStorage.setItem('nordBioMaps', JSON.stringify(chapters));
+                initSidebar();
+                const currentChapter = chapters.find(c => c.id === activeChapterId);
+                if (currentChapter) refreshMap(currentChapter.dataset);
+                else if (chapters.length > 0) loadChapter(chapters[0].id);
+            }
+        }
+
+        function redo() {
+            if (historyIndex < history.length - 1) {
+                historyIndex++;
+                chapters = JSON.parse(JSON.stringify(history[historyIndex]));
+                localStorage.setItem('nordBioMaps', JSON.stringify(chapters));
+                initSidebar();
+                const currentChapter = chapters.find(c => c.id === activeChapterId);
+                if (currentChapter) refreshMap(currentChapter.dataset);
+                else if (chapters.length > 0) loadChapter(chapters[0].id);
+            }
+        }
+
+        function zoomIn() {
+            if (svg && zoom) {
+                svg.transition().duration(300).call(zoom.scaleBy, 1.3);
+            }
+        }
+
+        function zoomOut() {
+            if (svg && zoom) {
+                svg.transition().duration(300).call(zoom.scaleBy, 1 / 1.3);
+            }
+        }
+
+        document.addEventListener('keydown', function(event) {
+            if (event.ctrlKey || event.metaKey) {
+                if (event.key === 'z') {
+                    if (document.activeElement.tagName === 'TEXTAREA' || document.activeElement.tagName === 'INPUT') return;
+                    if (event.shiftKey) redo();
+                    else undo();
+                    event.preventDefault();
+                } else if (event.key === 'y') {
+                    if (document.activeElement.tagName === 'TEXTAREA' || document.activeElement.tagName === 'INPUT') return;
+                    redo();
+                    event.preventDefault();
+                } else if (event.key === '=' || event.key === '+' || event.code === 'Equal') {
+                    event.preventDefault();
+                    zoomIn();
+                } else if (event.key === '-' || event.code === 'Minus') {
+                    event.preventDefault();
+                    zoomOut();
+                }
+            }
+        });
+
+        function loadChapters() {
+            const stored = localStorage.getItem('nordBioMaps');
+            if (stored) {
+                try { chapters = JSON.parse(stored); } catch (e) { chapters = [defaultChapter]; }
+            } else {
+                chapters = [defaultChapter];
+            }
+            initSidebar();
+            if (chapters.length > 0) {
+                const targetId = chapters.find(c => c.id === activeChapterId) ? activeChapterId : chapters[0].id;
+                loadChapter(targetId);
+            } else {
+                d3.select("#map-container").selectAll("*").remove();
+            }
+            commitHistory();
+        }
+
+        function saveChapters() {
+            localStorage.setItem('nordBioMaps', JSON.stringify(chapters));
+            commitHistory();
+        }
+
+        function initSidebar() {
+            const list = document.getElementById('chapter-list');
+            list.innerHTML = '';
+            
+            chapters.forEach(chapter => {
+                const li = document.createElement('li');
+                const isActive = chapter.id === activeChapterId;
+                
+                li.innerHTML = `
+                    <div onclick="loadChapter('${chapter.id}')" class="chapter-btn-wrapper ${isActive ? 'active' : ''}">
+                        <span class="chapter-btn-text">
+                            ${chapter.title}
+                        </span>
+                        <button onclick="deleteChapter('${chapter.id}', event)" class="chapter-btn-delete" title="Delete Map">
+                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                        </button>
+                    </div>
+                `;
+                list.appendChild(li);
+            });
+        }
+
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('overlay');
+            
+            if (window.innerWidth >= 1024) {
+                const isCollapsed = sidebar.classList.toggle('collapsed');
+                localStorage.setItem('nordBioSidebarCollapsed', isCollapsed);
+                setTimeout(() => {
+                    window.dispatchEvent(new Event('resize'));
+                }, 300);
+            } else {
+                if (sidebar.classList.contains('open')) {
+                    sidebar.classList.remove('open');
+                    overlay.classList.add('hidden');
+                } else {
+                    sidebar.classList.add('open');
+                    overlay.classList.remove('hidden');
+                }
+            }
+        }
+
+        function openModal() {
+            document.getElementById('add-map-modal').classList.remove('hidden');
+            document.getElementById('json-error').classList.add('hidden');
+        }
+
+        function closeModal() {
+            document.getElementById('add-map-modal').classList.add('hidden');
+            document.getElementById('map-title').value = '';
+        }
+
+        function saveCustomMap() {
+            const title = document.getElementById('map-title').value.trim();
+            const errorDiv = document.getElementById('json-error');
+
+            if (!title) {
+                errorDiv.innerText = "Please provide a title.";
+                errorDiv.classList.remove('hidden');
+                return;
+            }
+            const newChapter = {
+                id: 'custom_' + Date.now(),
+                title: title,
+                dataset: { id: 'node_' + Date.now(), name: title, children: [] }
+            };
+            chapters.push(newChapter);
+            saveChapters();
+            closeModal();
+            initSidebar();
+            loadChapter(newChapter.id);
+        }
+
+        function showNotification(msg, isSuccess = false) {
+            const toast = document.getElementById('toast-msg');
+            toast.innerText = msg;
+            toast.className = `toast ${isSuccess ? 'success' : 'error'}`;
+            toast.style.opacity = '1';
+            setTimeout(() => toast.style.opacity = '0', 3000);
+        }
+
+        function exportMap() {
+            const chapter = chapters.find(c => c.id === activeChapterId);
+            if (!chapter) return;
+            const blob = new Blob([JSON.stringify(chapter, null, 2)], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${chapter.title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_map.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            showNotification("Map exported successfully!", true);
+        }
+
+        function importMap(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const importedData = JSON.parse(e.target.result);
+                    if (importedData && importedData.title && importedData.dataset) {
+                        importedData.id = 'imported_' + Date.now();
+                        ensureDataIds(importedData.dataset); 
+                        chapters.push(importedData);
+                        saveChapters();
+                        initSidebar();
+                        loadChapter(importedData.id);
+                        showNotification("Map imported successfully!", true);
+                    }
+                } catch (err) {
+                    showNotification("Error parsing the file.");
+                }
+                event.target.value = ''; 
+            };
+            reader.readAsText(file);
+        }
+
+        function deleteChapter(id, event) {
+            event.stopPropagation();
+            if (confirm("Are you sure you want to delete this mind map?")) {
+                chapters = chapters.filter(c => c.id !== id);
+                saveChapters();
+                initSidebar();
+                
+                if (activeChapterId === id) {
+                    if (chapters.length > 0) {
+                        loadChapter(chapters[0].id);
+                    } else { 
+                        d3.select("#map-container").selectAll("*").remove(); 
+                        activeChapterId = null; 
+                        localStorage.removeItem('nordBioActiveChapterId');
+                    }
+                }
+            }
+        }
+
+        let svg, g, rootData, zoom;
+        let activeD3Node = null;
+
+        function loadChapter(id) {
+            activeChapterId = id;
+            localStorage.setItem('nordBioActiveChapterId', id);
+            initSidebar();
+            const chapter = chapters.find(c => c.id === id);
+            if(chapter) {
+                ensureDataIds(chapter.dataset); 
+                setupD3();
+                rootData = d3.hierarchy(chapter.dataset);
+                
+                const container = document.getElementById('map-container');
+                const height = container ? container.clientHeight : 800;
+                rootData.x0 = height / 2;
+                rootData.y0 = 0;
+
+                // Expand ONLY root: collapse all children from depth >= 1
+                rootData.descendants().forEach(d => {
+                    if (d.depth >= 1 && d.children) {
+                        d._children = d.children;
+                        d.children = null;
+                    }
+                });
+
+                updateD3(rootData);
+            }
+            if (window.innerWidth < 1024) {
+                document.getElementById('sidebar').classList.remove('open');
+                document.getElementById('overlay').classList.add('hidden');
+            }
+        }
+
+        function updateEditorPosition() {
+            if (!activeD3Node) return;
+            const editorContainer = document.getElementById('inline-editor-container');
+            if (editorContainer.classList.contains('hidden')) return;
+
+            const nodeEl = d3.selectAll('.node').filter(d => d.data.id === activeD3Node.data.id).node();
+            if (!nodeEl) return;
+            
+            const textEl = d3.select(nodeEl).select("text").node();
+            if (!textEl) return;
+            
+            const rect = textEl.getBoundingClientRect();
+            editorContainer.style.left = (rect.left - 8) + 'px'; 
+            editorContainer.style.top = (rect.top - 8) + 'px';
+        }
+
+        function autoResizeTextarea(el) {
+            el.style.height = 'auto';
+            el.style.height = el.scrollHeight + 'px';
+        }
+        
+        function closeNodeEditor(skipRefresh = false) {
+            const editorContainer = document.getElementById('inline-editor-container');
+            const textarea = document.getElementById('inline-text-editor');
+            
+            if (activeD3Node) {
+                const newText = textarea.value.trim();
+                if (activeD3Node.data.name !== newText) {
+                    activeD3Node.data.name = newText;
+                    saveChapters();
+                }
+                const targetNode = activeD3Node;
+                activeD3Node = null;
+                if (!skipRefresh) refreshMap(targetNode.data); 
+            }
+            
+            d3.selectAll('.node text').style("visibility", "visible");
+            editorContainer.classList.add('hidden');
+        }
+
+        function openNodeEditor(event, d, nodeElement) {
+            if (activeD3Node) closeNodeEditor();
+
+            activeD3Node = d;
+            const editorContainer = document.getElementById('inline-editor-container');
+            const textarea = document.getElementById('inline-text-editor');
+            const textEl = d3.select(nodeElement).select("text").node();
+            
+            const rect = textEl.getBoundingClientRect();
+            textarea.value = d.data.name || "";
+            textarea.style.width = Math.max(rect.width + 16, 200) + 'px';
+            
+            d3.select(textEl).style("visibility", "hidden");
+            editorContainer.classList.remove('hidden');
+            
+            document.getElementById('inline-btn-delete').classList.toggle('hidden', d.depth === 0);
+            
+            const hasImg = !!d.data.image;
+            document.getElementById('inline-btn-remove-img').classList.toggle('hidden', !hasImg);
+            document.getElementById('inline-btn-img-minus').classList.toggle('hidden', !hasImg);
+            document.getElementById('inline-btn-img-plus').classList.toggle('hidden', !hasImg);
+            
+            updateEditorPosition();
+            setTimeout(() => updateEditorPosition(), 20);
+
+            setTimeout(() => {
+                textarea.focus();
+                textarea.selectionStart = textarea.selectionEnd = textarea.value.length;
+                autoResizeTextarea(textarea);
+                updateEditorPosition();
+            }, 50);
+        }
+
+        function handleInlineKey(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault(); 
+                closeNodeEditor(); 
+            } else if (event.key === 'Escape') {
+                if (activeD3Node) document.getElementById('inline-text-editor').value = activeD3Node.data.name || ""; 
+                closeNodeEditor();
+            } else if (event.key === 'Tab') {
+                event.preventDefault();
+                addChildNode();
+            }
+        }
+
+        function handlePaste(event) {
+            if (!activeD3Node) return;
+            const clipboardData = event.clipboardData || window.clipboardData;
+            const items = clipboardData.items;
+
+            for (let i = 0; i < items.length; i++) {
+                const item = items[i];
+                if (item.type.indexOf("image") !== -1) {
+                    event.preventDefault(); 
+                    const file = item.getAsFile();
+                    const reader = new FileReader();
+                    
+                    reader.onload = function(e) {
+                        activeD3Node.data.image = e.target.result;
+                        activeD3Node.data.imageSize = activeD3Node.depth === 0 ? 56 : 40; 
+                        
+                        const textarea = document.getElementById('inline-text-editor');
+                        if (textarea.value.trim() && activeD3Node.data.name !== textarea.value.trim()) {
+                            activeD3Node.data.name = textarea.value.trim();
+                        }
+
+                        saveChapters();
+                        refreshMap(activeD3Node.data);
+                        
+                        document.getElementById('inline-btn-remove-img').classList.remove('hidden');
+                        document.getElementById('inline-btn-img-minus').classList.remove('hidden');
+                        document.getElementById('inline-btn-img-plus').classList.remove('hidden');
+                        setTimeout(() => updateEditorPosition(), 460);
+                    };
+                    reader.readAsDataURL(file);
+                    return; 
+                }
+            }
+        }
+
+        function resizeNodeImage(delta) {
+            if (!activeD3Node || !activeD3Node.data.image) return;
+            
+            let currentSize = activeD3Node.data.imageSize || (activeD3Node.depth === 0 ? 56 : 40);
+            let newSize = Math.max(20, Math.min(300, currentSize + delta));
+            
+            activeD3Node.data.imageSize = newSize;
+            saveChapters();
+            
+            refreshMap(activeD3Node.data);
+            setTimeout(() => updateEditorPosition(), 460); 
+        }
+
+        function calculateNodeContentHeight(d) {
+            const hasImage = !!d.data.image;
+            const imgSize = hasImage ? (d.data.imageSize || (d.depth === 0 ? 56 : 40)) : 0;
+            
+            const rawText = d.data.name || "";
+            let rawWords = rawText.split(/\s+/).filter(w => w.length > 0);
+            const MAX_CHAR = 38;
+            let words = [];
+            rawWords.forEach(w => {
+                if (w.length > MAX_CHAR) {
+                    let chunks = w.match(new RegExp('.{1,' + MAX_CHAR + '}', 'g'));
+                    if (chunks) words.push(...chunks);
+                } else {
+                    words.push(w);
+                }
+            });
+
+            let line = [];
+            let lineNumber = 1;
+            for (let i = 0; i < words.length; i++) {
+                line.push(words[i]);
+                let currentText = line.join(" ");
+                if (currentText.length > MAX_CHAR && line.length > 1) {
+                    line.pop();
+                    line = [words[i]];
+                    lineNumber++;
+                }
+            }
+            
+            const textHeight = lineNumber * 22; 
+            return Math.max(imgSize, textHeight) + 60; 
+        }
+
+        function calculateNodeContentWidth(d) {
+            if (d.depth === 0) return 160;
+
+            const hasImage = !!d.data.image;
+            const imgSize = hasImage ? (d.data.imageSize || 40) : 0;
+            const textStartX = hasImage ? (15 + imgSize + 10) : 20;
+
+            const rawText = d.data.name || "";
+            let rawWords = rawText.split(/\s+/).filter(w => w.length > 0);
+            const MAX_CHAR = 38;
+            let words = [];
+            rawWords.forEach(w => {
+                if (w.length > MAX_CHAR) {
+                    let chunks = w.match(new RegExp('.{1,' + MAX_CHAR + '}', 'g'));
+                    if (chunks) words.push(...chunks);
+                } else {
+                    words.push(w);
+                }
+            });
+
+            let line = [];
+            let maxLineChars = 0;
+            for (let i = 0; i < words.length; i++) {
+                line.push(words[i]);
+                let currentText = line.join(" ");
+                if (currentText.length > MAX_CHAR && line.length > 1) {
+                    line.pop();
+                    maxLineChars = Math.max(maxLineChars, line.join(" ").length);
+                    line = [words[i]];
+                }
+            }
+            if (line.length > 0) {
+                maxLineChars = Math.max(maxLineChars, line.join(" ").length);
+            }
+
+            const estimatedTextWidth = maxLineChars * 8.2;
+            const totalContentWidth = textStartX + estimatedTextWidth + 80;
+            return Math.max(180, totalContentWidth);
+        }
+
+        function computeCustomLayout(root) {
+            root.eachAfter(d => {
+                d.contentHeight = calculateNodeContentHeight(d);
+                d.contentWidth = calculateNodeContentWidth(d);
+                if (d.children && d.children.length > 0) {
+                    d.childrenHeight = d3.sum(d.children, c => c.subtreeHeight);
+                    d.subtreeHeight = Math.max(d.contentHeight, d.childrenHeight);
+                } else {
+                    d.childrenHeight = 0;
+                    d.subtreeHeight = d.contentHeight;
+                }
+            });
+
+            root.eachBefore(d => {
+                if (!d.parent) {
+                    d.x = 0;
+                    d.y = 0;
+                } else {
+                    const siblings = d.parent.children;
+                    const idx = siblings.indexOf(d);
+                    
+                    if (idx === 0) {
+                        d.parent._childrenTop = d.parent.x - (d.parent.childrenHeight / 2);
+                    }
+                    
+                    let top = d.parent._childrenTop;
+                    for (let i = 0; i < idx; i++) {
+                        top += siblings[i].subtreeHeight;
+                    }
+                    
+                    d.x = top + (d.subtreeHeight / 2);
+                    d.y = d.parent.y + d.parent.contentWidth;
+                }
+            });
+        }
+
+        function refreshMap(actionSourceData) {
+            const chapter = chapters.find(c => c.id === activeChapterId);
+            ensureDataIds(chapter.dataset); 
+            
+            const oldRoot = rootData;
+            rootData = d3.hierarchy(chapter.dataset);
+            
+            rootData.x0 = oldRoot ? oldRoot.x0 : 0;
+            rootData.y0 = oldRoot ? oldRoot.y0 : 0;
+
+            const collapsedState = new Set();
+            if (oldRoot) {
+                oldRoot.descendants().forEach(d => {
+                    if (d._children) collapsedState.add(d.data.id);
+                });
+            }
+
+            rootData.descendants().forEach(d => {
+                if (collapsedState.has(d.data.id)) {
+                    if (d.children) {
+                        d._children = d.children;
+                        d.children = null;
+                    }
+                }
+                if (actionSourceData && d.data.id === actionSourceData.id) {
+                    if (d._children) {
+                        d.children = d._children;
+                        d._children = null;
+                    }
+                }
+            });
+
+            if (activeD3Node) {
+                const updatedActiveNode = rootData.descendants().find(d => d.data.id === activeD3Node.data.id);
+                if (updatedActiveNode) activeD3Node = updatedActiveNode;
+            }
+
+            let transitionSource = rootData;
+            if (actionSourceData) {
+                const found = rootData.descendants().find(d => d.data.id === actionSourceData.id);
+                if (found) {
+                    const oldNode = oldRoot ? oldRoot.descendants().find(old => old.data.id === found.data.id) : null;
+                    if (oldNode) {
+                        found.x0 = oldNode.x0;
+                        found.y0 = oldNode.y0;
+                    }
+                    transitionSource = found;
+                }
+            }
+
+            updateD3(transitionSource);
+        }
+
+        function addChildNode() {
+            if (activeD3Node) {
+                if (activeD3Node._children) {
+                    activeD3Node.data.children = activeD3Node._children.map(child => child.data);
+                    activeD3Node._children = null;
+                }
+                if (!activeD3Node.data.children) activeD3Node.data.children = [];
+                
+                const textarea = document.getElementById('inline-text-editor');
+                const newText = textarea.value.trim();
+                if (activeD3Node.data.name !== newText) {
+                    activeD3Node.data.name = newText;
+                }
+
+                activeD3Node.data.children.push({ id: 'node_' + Date.now(), name: "" });
+                saveChapters();
+                
+                const targetData = activeD3Node.data;
+                activeD3Node = null;
+                closeNodeEditor(true);
+                refreshMap(targetData);
+            }
+        }
+
+        function deleteNodeData() {
+            if (activeD3Node && activeD3Node.depth !== 0) {
+                const parent = activeD3Node.parent;
+                if (parent) {
+                    parent.data.children = parent.data.children.filter(child => child.id !== activeD3Node.data.id);
+                    if (parent.data.children.length === 0) delete parent.data.children;
+                    
+                    saveChapters();
+                    const targetData = parent.data; 
+                    
+                    activeD3Node = null;
+                    closeNodeEditor(true);
+                    refreshMap(targetData);
+                }
+            }
+        }
+
+        function uploadNodeImage(event) {
+            const file = event.target.files[0];
+            if (!file || !activeD3Node) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                activeD3Node.data.image = e.target.result;
+                activeD3Node.data.imageSize = activeD3Node.depth === 0 ? 56 : 40; 
+                
+                const textarea = document.getElementById('inline-text-editor');
+                const newText = textarea.value.trim();
+                if (activeD3Node.data.name !== newText) {
+                    activeD3Node.data.name = newText;
+                }
+
+                saveChapters();
+                refreshMap(activeD3Node.data);
+                
+                document.getElementById('inline-btn-remove-img').classList.remove('hidden');
+                document.getElementById('inline-btn-img-minus').classList.remove('hidden');
+                document.getElementById('inline-btn-img-plus').classList.remove('hidden');
+                setTimeout(() => updateEditorPosition(), 460);
+            };
+            reader.readAsDataURL(file);
+            event.target.value = ''; 
+        }
+
+        function removeNodeImage() {
+            if (activeD3Node) {
+                delete activeD3Node.data.image;
+                delete activeD3Node.data.imageSize;
+                
+                const textarea = document.getElementById('inline-text-editor');
+                const newText = textarea.value.trim();
+                if (activeD3Node.data.name !== newText) {
+                    activeD3Node.data.name = newText;
+                }
+
+                saveChapters();
+                refreshMap(activeD3Node.data);
+                
+                document.getElementById('inline-btn-remove-img').classList.add('hidden');
+                document.getElementById('inline-btn-img-minus').classList.add('hidden');
+                document.getElementById('inline-btn-img-plus').classList.add('hidden');
+                setTimeout(() => updateEditorPosition(), 460);
+            }
+        }
+
+        function getNordColor(depth) {
+            const colors = ["#b48ead", "#88c0d0", "#a3be8c", "#ebcb8b", "#d08770", "#bf616a", "#81a1c1"];
+            return colors[Math.min(depth, colors.length - 1)];
+        }
+        
+        function wrapNodeText(textSelection) {
+            textSelection.each(function(d) {
+                const textElement = d3.select(this);
+                const rawText = d.data.name || "";
+                
+                let rawWords = rawText.split(/\s+/).filter(w => w.length > 0);
+                const MAX_CHAR = 38;
+                let words = [];
+                rawWords.forEach(w => {
+                    if (w.length > MAX_CHAR) {
+                        let chunks = w.match(new RegExp('.{1,' + MAX_CHAR + '}', 'g'));
+                        if (chunks) words.push(...chunks);
+                    } else {
+                        words.push(w);
+                    }
+                });
+
+                let line = [];
+                let lineNumber = 0;
+                const lineHeight = 1.25; 
+                
+                const isRoot = d.depth === 0;
+                const hasImage = !!d.data.image;
+                const imgSize = d.data.imageSize || (isRoot ? 56 : 40);
+                
+                let x = 0;
+                if (isRoot) {
+                    x = hasImage ? -15 - imgSize - 10 : -20;
+                } else {
+                    x = hasImage ? 15 + imgSize + 10 : 20; 
+                }
+                
+                textElement.attr("text-anchor", isRoot ? "end" : "start");
+                textElement.text(null);
+                let tspan = textElement.append("tspan").attr("x", x).attr("dy", "0em");
+                
+                if (words.length === 0) {
+                    tspan.text("");
+                } else {
+                    for (let i = 0; i < words.length; i++) {
+                        line.push(words[i]);
+                        let currentText = line.join(" ");
+                        
+                        if (currentText.length > MAX_CHAR && line.length > 1) {
+                            line.pop();
+                            tspan.text(line.join(" "));
+                            line = [words[i]];
+                            tspan = textElement.append("tspan").attr("x", x).attr("dy", lineHeight + "em").text(words[i]);
+                            lineNumber++;
+                        } else {
+                            tspan.text(currentText);
+                        }
+                    }
+                }
+                
+                const totalEms = lineNumber * lineHeight;
+                const initialDy = -(totalEms / 2) + 0.35;
+                textElement.select("tspan").attr("dy", initialDy + "em");
+            });
+        }
+
+        function setupD3() {
+            const container = document.getElementById('map-container');
+            d3.select(container).selectAll("*").remove();
+            
+            const width = container.clientWidth;
+            const height = container.clientHeight;
+
+            svg = d3.select(container).append("svg")
+                .attr("width", "100%")
+                .attr("height", "100%")
+                .attr("viewBox", [0, 0, width, height])
+                .on("click", (event) => {
+                    if (event.target.tagName === 'svg') {
+                        closeNodeEditor(); 
+                    }
+                });
+
+            g = svg.append("g");
+
+            zoom = d3.zoom()
+                .scaleExtent([0.1, 3])
+                .filter((event) => {
+                    if (event.type === 'wheel') return true;
+                    return !event.button;
+                })
+                .on("zoom", (event) => {
+                    g.attr("transform", event.transform);
+                    updateEditorPosition(); 
+                });
+
+            svg.call(zoom);
+
+            svg.on("wheel", (event) => {
+                event.preventDefault();
+            });
+            
+            const initialTransform = d3.zoomIdentity.translate(280, height / 2).scale(0.85);
+            svg.call(zoom.transform, initialTransform);
+        }
+
+        function updateD3(source) {
+            const duration = 450;
+            
+            computeCustomLayout(rootData);
+            
+            const nodes = rootData.descendants();
+            const links = rootData.links();
+
+            const node = g.selectAll("g.node").data(nodes, d => d.data.id);
+
+            const nodeEnter = node.enter().append("g")
+                .attr("class", "node")
+                .attr("transform", d => `translate(${source.y0},${source.x0})`)
+                .on("click", function(event, d) {
+                    event.stopPropagation();
+                    closeNodeEditor(); 
+                    
+                    if (d.children || d._children) {
+                        if (d.children) { d._children = d.children; d.children = null; } 
+                        else { d.children = d._children; d._children = null; }
+                        updateD3(d);
+                    }
+                })
+                .on("contextmenu", function(event, d) {
+                    event.preventDefault(); 
+                    event.stopPropagation();
+                    openNodeEditor(event, d, this);
+                });
+
+            nodeEnter.append("circle")
+                .attr("r", 1e-6)
+                .style("stroke", d => getNordColor(d.depth))
+                .style("stroke-width", "2.5px")
+                .style("fill", d => d._children ? getNordColor(d.depth) : "var(--adw-view)");
+
+            nodeEnter.append("text")
+                .style("fill-opacity", 1e-6)
+                .style("font-weight", d => d.depth === 0 ? "700" : (d.depth === 1 ? "600" : "500"))
+                .style("fill", d => d.depth === 0 ? "var(--adw-accent)" : "var(--adw-text)")
+                .call(wrapNodeText);
+
+            nodeEnter.append("image")
+                .style("pointer-events", "none");
+
+            const nodeUpdate = nodeEnter.merge(node)
+                .transition().duration(duration)
+                .attr("transform", d => `translate(${d.y},${d.x})`);
+
+            nodeUpdate.select("circle")
+                .attr("r", d => d.depth === 0 ? 12 : 7)
+                .style("fill", d => d._children ? getNordColor(d.depth) : "var(--adw-view)")
+                .style("stroke", d => getNordColor(d.depth))
+                .style("cursor", d => d.children || d._children ? "pointer" : "context-menu");
+            
+            nodeUpdate.select("text")
+                .style("fill-opacity", 1)
+                .style("visibility", d => {
+                    const isEditorOpen = !document.getElementById('inline-editor-container').classList.contains('hidden');
+                    const isThisNodeActive = activeD3Node && d.data.id === activeD3Node.data.id;
+                    return (isEditorOpen && isThisNodeActive) ? "hidden" : "visible";
+                }) 
+                .call(wrapNodeText);
+            
+            nodeUpdate.select("image")
+                .attr("href", d => d.data.image || null)
+                .attr("x", d => {
+                    const isRoot = d.depth === 0;
+                    const s = d.data.imageSize || (isRoot ? 56 : 40);
+                    return isRoot ? -15 - s : 15;
+                })
+                .attr("y", d => {
+                    const s = d.data.imageSize || (d.depth === 0 ? 56 : 40);
+                    return -(s/2);
+                })
+                .attr("width", d => d.data.imageSize || (d.depth === 0 ? 56 : 40))
+                .attr("height", d => d.data.imageSize || (d.depth === 0 ? 56 : 40))
+                .attr("preserveAspectRatio", "xMidYMid slice")
+                .style("display", d => d.data.image ? "block" : "none")
+                .style("opacity", 1);
+
+            const nodeExit = node.exit().transition().duration(duration)
+                .attr("transform", d => `translate(${source.y},${source.x})`)
+                .remove();
+
+            nodeExit.select("circle").attr("r", 1e-6);
+            nodeExit.select("text").style("fill-opacity", 1e-6);
+            nodeExit.select("image").style("opacity", 1e-6);
+
+            const linkGenerator = d3.linkHorizontal().x(d => d.y).y(d => d.x);
+            
+            const link = g.selectAll("path.link").data(links, d => d.target.data.id);
+
+            const linkEnter = link.enter().insert("path", "g")
+                .attr("class", "link")
+                .attr("d", d => {
+                    const o = {x: source.x0, y: source.y0};
+                    return linkGenerator({source: o, target: o});
+                })
+                .style("stroke", d => getNordColor(d.source.depth)) 
+                .style("stroke-opacity", 0.65)
+                .style("stroke-width", d => Math.max(1.5, 4.0 - d.source.depth) + "px"); 
+
+            const linkUpdate = linkEnter.merge(link);
+            linkUpdate.transition().duration(duration)
+                .attr("d", linkGenerator)
+                .style("stroke", d => getNordColor(d.source.depth))
+                .style("stroke-width", d => Math.max(1.5, 4.0 - d.source.depth) + "px");
+
+            link.exit().transition().duration(duration)
+                .attr("d", d => {
+                    const o = {x: source.x, y: source.y};
+                    return linkGenerator({source: o, target: o});
+                })
+                .remove();
+
+            nodes.forEach(d => { d.x0 = d.x; d.y0 = d.y; });
+        }
+
+        document.addEventListener("DOMContentLoaded", () => {
+            const isCollapsed = localStorage.getItem('nordBioSidebarCollapsed');
+            const sidebar = document.getElementById('sidebar');
+            if (isCollapsed === 'false') {
+                sidebar.classList.remove('collapsed');
+            } else {
+                sidebar.classList.add('collapsed');
+            }
+
+            loadChapters();
+            window.addEventListener('resize', () => {
+                if (window.innerWidth >= 1024) {
+                    document.getElementById('overlay').classList.add('hidden');
+                }
+            });
+        });
+
+        window.toggleSidebar = toggleSidebar;
+        window.openModal = openModal;
+        window.closeModal = closeModal;
+        window.saveCustomMap = saveCustomMap;
+        window.deleteChapter = deleteChapter;
+        window.loadChapter = loadChapter;
+        window.exportMap = exportMap;
+        window.importMap = importMap;
+        window.undo = undo;
+        window.redo = redo;
+        window.zoomIn = zoomIn;
+        window.zoomOut = zoomOut;
+        
+        window.openNodeEditor = openNodeEditor;
+        window.closeNodeEditor = closeNodeEditor;
+        window.updateEditorPosition = updateEditorPosition;
+        window.handleInlineKey = handleInlineKey;
+        window.handlePaste = handlePaste;
+        window.resizeNodeImage = resizeNodeImage;
+        window.addChildNode = addChildNode;
+        window.deleteNodeData = deleteNodeData;
+        window.uploadNodeImage = uploadNodeImage;
+        window.removeNodeImage = removeNodeImage;
+        window.autoResizeTextarea = autoResizeTextarea;
+    </script>
+</body>
+</html>
