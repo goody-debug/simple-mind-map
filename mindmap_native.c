@@ -71,6 +71,7 @@ typedef struct {
 
     // Active animations for smooth node folding
     GPtrArray *active_animations; // NodeAnimation*
+    guint tick_id;
 
     // Inline Popover Editor
     MindNode *editing_node;
@@ -116,8 +117,24 @@ static MindNode *node_new(const char *name) {
     return n;
 }
 
+static void cancel_animation_for_node(MindNode *n) {
+    if (!app_state || !app_state->active_animations) return;
+    for (guint i = 0; i < app_state->active_animations->len; ) {
+        NodeAnimation *anim = g_ptr_array_index(app_state->active_animations, i);
+        if (anim->node == n) {
+            g_ptr_array_remove_index(app_state->active_animations, i);
+        } else {
+            i++;
+        }
+    }
+}
+
 static void node_free(MindNode *n) {
     if (!n) return;
+    cancel_animation_for_node(n);
+    if (app_state && app_state->editing_node == n) {
+        app_state->editing_node = NULL;
+    }
     g_free(n->id);
     g_free(n->name);
     g_free(n->image_b64);
@@ -149,6 +166,34 @@ static Chapter *get_active_chapter(void) {
     return NULL;
 }
 
+static MindNode *find_node_by_id(MindNode *n, const char *id) {
+    if (!n || !id) return NULL;
+    if (g_strcmp0(n->id, id) == 0) return n;
+    if (n->children) {
+        for (guint i = 0; i < n->children->len; i++) {
+            MindNode *found = find_node_by_id(g_ptr_array_index(n->children, i), id);
+            if (found) return found;
+        }
+    }
+    return NULL;
+}
+
+static void node_collapse_subtree_except_root(MindNode *n) {
+    if (!n) return;
+    if (n->parent != NULL) {
+        n->collapsed = TRUE;
+        n->anim_progress = 0.0;
+    } else {
+        n->collapsed = FALSE;
+        n->anim_progress = 1.0;
+    }
+    if (n->children) {
+        for (guint i = 0; i < n->children->len; i++) {
+            node_collapse_subtree_except_root(g_ptr_array_index(n->children, i));
+        }
+    }
+}
+
 static Chapter *create_default_chapter(void) {
     Chapter *c = g_new0(Chapter, 1);
     c->id = g_strdup("breathing_exchange");
@@ -159,8 +204,6 @@ static Chapter *create_default_chapter(void) {
 
     MindNode *c1 = node_new("1. Respiratory Organs");
     c1->parent = root;
-    c1->collapsed = TRUE;
-    c1->anim_progress = 0.0;
 
     const char *items[] = {
         "Sponges, Coelenterates, Flatworms (Entire body surface / Simple diffusion)",
@@ -175,20 +218,8 @@ static Chapter *create_default_chapter(void) {
 
     g_ptr_array_add(root->children, c1);
     c->root = root;
+    node_collapse_subtree_except_root(c->root);
     return c;
-}
-
-static void node_collapse_subtree_except_root(MindNode *n) {
-    if (!n) return;
-    if (n->parent != NULL) {
-        n->collapsed = TRUE;
-        n->anim_progress = 0.0;
-    }
-    if (n->children) {
-        for (guint i = 0; i < n->children->len; i++) {
-            node_collapse_subtree_except_root(g_ptr_array_index(n->children, i));
-        }
-    }
 }
 
 /* =========================================================================
@@ -235,6 +266,31 @@ static cairo_surface_t *node_get_surface(MindNode *n) {
     return n->surface_cache;
 }
 
+static gboolean get_node_image_dimensions(MindNode *n, double *out_w, double *out_h) {
+    cairo_surface_t *surf = node_get_surface(n);
+    if (!surf) {
+        if (out_w) *out_w = 0;
+        if (out_h) *out_h = 0;
+        return FALSE;
+    }
+    int tw = cairo_image_surface_get_width(surf);
+    int th = cairo_image_surface_get_height(surf);
+    if (tw <= 0 || th <= 0) {
+        if (out_w) *out_w = 0;
+        if (out_h) *out_h = 0;
+        return FALSE;
+    }
+    double max_s = n->image_size > 0 ? n->image_size : (n->depth == 0 ? 56.0 : 40.0);
+    if (tw >= th) {
+        if (out_w) *out_w = max_s;
+        if (out_h) *out_h = max_s * ((double)th / tw);
+    } else {
+        if (out_h) *out_h = max_s;
+        if (out_w) *out_w = max_s * ((double)tw / th);
+    }
+    return TRUE;
+}
+
 /* =========================================================================
  * JSON Serialization & Persistence
  * ========================================================================= */
@@ -272,6 +328,8 @@ static MindNode *deserialize_mind_node(JsonObject *obj, MindNode *parent, int de
     }
     if (json_object_has_member(obj, "collapsed")) {
         n->collapsed = json_object_get_boolean_member(obj, "collapsed");
+    } else {
+        n->collapsed = (depth >= 1);
     }
     n->anim_progress = n->collapsed ? 0.0 : 1.0;
 
@@ -346,6 +404,8 @@ static void restore_from_json_string(const char *json_str, gboolean restore_ui_s
     if (!root || !JSON_NODE_HOLDS_OBJECT(root)) return;
     JsonObject *root_obj = json_node_get_object(root);
 
+    g_ptr_array_set_size(app_state->active_animations, 0);
+
     for (guint i = 0; i < app_state->chapters->len; i++) {
         chapter_free(g_ptr_array_index(app_state->chapters, i));
     }
@@ -408,31 +468,25 @@ static void save_state_to_disk(void) {
 static void load_state_from_disk(void) {
     char *path = get_state_file_path();
     char *contents = NULL;
-    
-    gboolean loaded_successfully = FALSE;
+
     if (g_file_get_contents(path, &contents, NULL, NULL)) {
         restore_from_json_string(contents, TRUE);
         g_free(contents);
-        loaded_successfully = (app_state->chapters->len > 0);
     }
     g_free(path);
 
-    if (!loaded_successfully || app_state->chapters->len == 0) {
-        for (guint i = 0; i < app_state->chapters->len; i++) {
-            chapter_free(g_ptr_array_index(app_state->chapters, i));
-        }
-        g_ptr_array_set_size(app_state->chapters, 0);
+    if (app_state->chapters->len == 0) {
         g_ptr_array_add(app_state->chapters, create_default_chapter());
     }
 
     Chapter *active = get_active_chapter();
-    if (!active || !active->root) {
+    if (!active) {
         Chapter *first = g_ptr_array_index(app_state->chapters, 0);
         g_free(app_state->active_chapter_id);
         app_state->active_chapter_id = g_strdup(first->id);
+        active = first;
     }
-    
-    active = get_active_chapter();
+
     if (active && !active->root) {
         active->root = node_new(active->title ? active->title : "Mind Map");
     }
@@ -474,15 +528,15 @@ static void compute_node_text_metrics(MindNode *n, PangoContext *pctx, int depth
     n->text_h = (n->name && *n->name) ? logical_rect.height : 0;
     g_object_unref(layout);
 
-    gboolean has_img = (n->image_b64 && *n->image_b64);
-    int img_s = has_img ? (n->image_size > 0 ? n->image_size : (depth == 0 ? 56 : 40)) : 0;
+    double img_w = 0, img_h = 0;
+    gboolean has_img = get_node_image_dimensions(n, &img_w, &img_h);
 
-    n->content_height = fmax(img_s, n->text_h) + 52.0;
+    n->content_height = fmax(img_h, n->text_h) + 52.0;
 
     if (depth == 0) {
         n->content_width = 160.0;
     } else {
-        double text_start_x = has_img ? (15.0 + img_s + 10.0) : 20.0;
+        double text_start_x = has_img ? (15.0 + img_w + 10.0) : 20.0;
         n->content_width = fmax(180.0, text_start_x + n->text_w + 75.0);
     }
 
@@ -530,7 +584,10 @@ static void assign_coordinates(MindNode *n) {
 static void start_node_animation(MindNode *node, gboolean expand) {
     node->collapsed = !expand;
     double target = expand ? 1.0 : 0.0;
-    if (fabs(node->anim_progress - target) < 0.001) return;
+    if (fabs(node->anim_progress - target) < 0.001) {
+        node->anim_progress = target;
+        return;
+    }
 
     NodeAnimation *anim = NULL;
     for (guint i = 0; i < app_state->active_animations->len; i++) {
@@ -554,47 +611,42 @@ static void start_node_animation(MindNode *node, gboolean expand) {
     anim->start_time = now;
     anim->duration = 300000;
 
-    if (app_state->active_animations->len == 1 && anim == g_ptr_array_index(app_state->active_animations, 0)) {
-        gtk_widget_add_tick_callback(app_state->drawing_area, drawing_area_tick_cb, NULL, NULL);
+    if (app_state->tick_id == 0) {
+        app_state->tick_id = gtk_widget_add_tick_callback(
+            app_state->drawing_area, drawing_area_tick_cb, NULL, NULL);
     }
 }
 
 static gboolean drawing_area_tick_cb(GtkWidget *widget, GdkFrameClock *frame_clock, gpointer user_data) {
     if (!app_state || app_state->active_animations->len == 0) {
+        if (app_state) app_state->tick_id = 0;
         return G_SOURCE_REMOVE;
     }
 
     gint64 now = gdk_frame_clock_get_frame_time(frame_clock);
 
-    for (guint i = 0; i < app_state->active_animations->len; i++) {
+    for (guint i = 0; i < app_state->active_animations->len; ) {
         NodeAnimation *anim = g_ptr_array_index(app_state->active_animations, i);
         double elapsed = (double)(now - anim->start_time);
         double progress = elapsed / (double)anim->duration;
+
         if (progress >= 1.0) {
             anim->node->anim_progress = anim->target_val;
+            g_ptr_array_remove_index(app_state->active_animations, i);
         } else {
             double eased = 1.0 - pow(1.0 - progress, 4.0);
             anim->node->anim_progress = anim->start_val + (anim->target_val - anim->start_val) * eased;
+            i++;
         }
     }
-
-    GPtrArray *surviving_animations = g_ptr_array_new_with_free_func(g_free);
-    for (guint i = 0; i < app_state->active_animations->len; i++) {
-        NodeAnimation *anim = g_ptr_array_index(app_state->active_animations, i);
-        if (fabs(anim->node->anim_progress - anim->target_val) < 0.0001) {
-            anim->node->anim_progress = anim->target_val;
-            g_free(anim);
-        } else {
-            g_ptr_array_add(surviving_animations, anim);
-        }
-    }
-
-    g_ptr_array_free(app_state->active_animations, FALSE);
-    app_state->active_animations = surviving_animations;
 
     gtk_widget_queue_draw(widget);
 
-    return (app_state->active_animations->len > 0) ? G_SOURCE_CONTINUE : G_SOURCE_REMOVE;
+    if (app_state->active_animations->len == 0) {
+        app_state->tick_id = 0;
+        return G_SOURCE_REMOVE;
+    }
+    return G_SOURCE_CONTINUE;
 }
 
 /* =========================================================================
@@ -606,6 +658,7 @@ static void commit_history(void) {
     char *snap = serialize_all_to_string(FALSE);
 
     if (app_state->history_index >= 0 &&
+        app_state->history_index < (int)app_state->history->len &&
         g_strcmp0(snap, g_ptr_array_index(app_state->history, app_state->history_index)) == 0) {
         g_free(snap);
         save_state_to_disk();
@@ -619,17 +672,15 @@ static void commit_history(void) {
     g_ptr_array_add(app_state->history, snap);
     if (app_state->history->len > 40) {
         g_ptr_array_remove_index(app_state->history, 0);
-        app_state->history_index--;
-    } else {
-        app_state->history_index++;
     }
+    app_state->history_index = (int)app_state->history->len - 1;
     save_state_to_disk();
 }
 
 static void perform_undo(void) {
     if (app_state->history_index > 0) {
-        gtk_popover_popdown(GTK_POPOVER(app_state->editor_popover));
         app_state->editing_node = NULL;
+        gtk_popover_popdown(GTK_POPOVER(app_state->editor_popover));
         app_state->history_index--;
         const char *snap = g_ptr_array_index(app_state->history, app_state->history_index);
         app_state->suppress_history = TRUE;
@@ -643,8 +694,8 @@ static void perform_undo(void) {
 
 static void perform_redo(void) {
     if (app_state->history_index < (int)app_state->history->len - 1) {
-        gtk_popover_popdown(GTK_POPOVER(app_state->editor_popover));
         app_state->editing_node = NULL;
+        gtk_popover_popdown(GTK_POPOVER(app_state->editor_popover));
         app_state->history_index++;
         const char *snap = g_ptr_array_index(app_state->history, app_state->history_index);
         app_state->suppress_history = TRUE;
@@ -709,62 +760,47 @@ static void draw_nodes_recursive(cairo_t *cr, PangoContext *pctx, MindNode *n) {
     cairo_stroke(cr);
 
     gboolean is_root = (n->depth == 0);
-    cairo_surface_t *surf = node_get_surface(n);
-    gboolean has_img = (surf != NULL);
+    double img_w = 0, img_h = 0;
+    gboolean has_img = get_node_image_dimensions(n, &img_w, &img_h);
 
     if (has_img) {
+        cairo_surface_t *surf = node_get_surface(n);
         int tw = cairo_image_surface_get_width(surf);
         int th = cairo_image_surface_get_height(surf);
-        if (tw > 0 && th > 0) {
-            // Dynamically calculate container dimensions to match the image aspect ratio
-            double max_s = n->image_size > 0 ? n->image_size : (is_root ? 56 : 40);
-            double img_w, img_h;
-            if (tw >= th) {
-                img_w = max_s;
-                img_h = max_s * ((double)th / tw);
-            } else {
-                img_h = max_s;
-                img_w = max_s * ((double)tw / th);
-            }
 
-            double img_x = is_root ? (n->y - 15.0 - img_w) : (n->y + 15.0);
-            double img_y = n->x - (img_h / 2.0);
+        double img_x = is_root ? (n->y - 15.0 - img_w) : (n->y + 15.0);
+        double img_y = n->x - (img_h / 2.0);
+        double r = MIN(6.0, MIN(img_w, img_h) / 2.0);
 
-            cairo_save(cr);
-            
-            // Draw rounded background container matching exact image dimensions
-            double r = 6.0;
-            cairo_new_path(cr);
-            cairo_arc(cr, img_x + img_w - r, img_y + r, r, -G_PI / 2, 0);
-            cairo_arc(cr, img_x + img_w - r, img_y + img_h - r, r, 0, G_PI / 2);
-            cairo_arc(cr, img_x + r, img_y + img_h - r, r, G_PI / 2, G_PI);
-            cairo_arc(cr, img_x + r, img_y + r, r, G_PI, 3 * G_PI / 2);
-            cairo_close_path(cr);
-            
-            cairo_set_source_rgba(cr, 0.15, 0.18, 0.22, 0.9);
-            cairo_fill_preserve(cr);
-            cairo_clip(cr);
+        cairo_save(cr);
+        cairo_new_path(cr);
+        cairo_arc(cr, img_x + img_w - r, img_y + r, r, -G_PI / 2, 0);
+        cairo_arc(cr, img_x + img_w - r, img_y + img_h - r, r, 0, G_PI / 2);
+        cairo_arc(cr, img_x + r, img_y + img_h - r, r, G_PI / 2, G_PI);
+        cairo_arc(cr, img_x + r, img_y + r, r, G_PI, 3 * G_PI / 2);
+        cairo_close_path(cr);
 
-            // Paint image uniformly without cropping or letterboxing
-            cairo_translate(cr, img_x, img_y);
-            cairo_scale(cr, (double)img_w / tw, (double)img_h / th);
-            cairo_set_source_surface(cr, surf, 0, 0);
-            cairo_paint(cr);
-            cairo_restore(cr);
+        cairo_set_source_rgba(cr, 0.15, 0.18, 0.22, 0.9);
+        cairo_fill_preserve(cr);
+        cairo_clip(cr);
 
-            // Subtle border outline
-            cairo_save(cr);
-            cairo_new_path(cr);
-            cairo_arc(cr, img_x + img_w - r, img_y + r, r, -G_PI / 2, 0);
-            cairo_arc(cr, img_x + img_w - r, img_y + img_h - r, r, 0, G_PI / 2);
-            cairo_arc(cr, img_x + r, img_y + img_h - r, r, G_PI / 2, G_PI);
-            cairo_arc(cr, img_x + r, img_y + r, r, G_PI, 3 * G_PI / 2);
-            cairo_close_path(cr);
-            cairo_set_line_width(cr, 1.0);
-            cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.15);
-            cairo_stroke(cr);
-            cairo_restore(cr);
-        }
+        cairo_translate(cr, img_x, img_y);
+        cairo_scale(cr, img_w / tw, img_h / th);
+        cairo_set_source_surface(cr, surf, 0, 0);
+        cairo_paint(cr);
+        cairo_restore(cr);
+
+        cairo_save(cr);
+        cairo_new_path(cr);
+        cairo_arc(cr, img_x + img_w - r, img_y + r, r, -G_PI / 2, 0);
+        cairo_arc(cr, img_x + img_w - r, img_y + img_h - r, r, 0, G_PI / 2);
+        cairo_arc(cr, img_x + r, img_y + img_h - r, r, G_PI / 2, G_PI);
+        cairo_arc(cr, img_x + r, img_y + r, r, G_PI, 3 * G_PI / 2);
+        cairo_close_path(cr);
+        cairo_set_line_width(cr, 1.0);
+        cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.15);
+        cairo_stroke(cr);
+        cairo_restore(cr);
     }
 
     if (n->name && *n->name) {
@@ -772,22 +808,9 @@ static void draw_nodes_recursive(cairo_t *cr, PangoContext *pctx, MindNode *n) {
         PangoRectangle ink_rect, logical_rect;
         pango_layout_get_pixel_extents(layout, &ink_rect, &logical_rect);
 
-        double img_w_offset = 0;
-        if (has_img) {
-            int tw = cairo_image_surface_get_width(surf);
-            int th = cairo_image_surface_get_height(surf);
-            double max_s = n->image_size > 0 ? n->image_size : (is_root ? 56 : 40);
-            img_w_offset = (tw >= th) ? max_s : (max_s * ((double)tw / th));
-        }
-
-        double text_x;
-        if (is_root) {
-            double gap = has_img ? (15.0 + img_w_offset + 10.0) : 20.0;
-            text_x = n->y - gap - logical_rect.width - logical_rect.x;
-        } else {
-            double gap = has_img ? (15.0 + img_w_offset + 10.0) : 20.0;
-            text_x = n->y + gap - logical_rect.x;
-        }
+        double gap = has_img ? (15.0 + img_w + 10.0) : 20.0;
+        double text_x = is_root ? (n->y - gap - logical_rect.width - logical_rect.x)
+                                : (n->y + gap - logical_rect.x);
         double text_y = n->x - (logical_rect.height / 2.0) - logical_rect.y;
 
         if (is_root) {
@@ -840,17 +863,17 @@ static MindNode *hit_test_node(MindNode *n, double world_x, double world_y) {
     if (!n) return NULL;
 
     gboolean is_root = (n->depth == 0);
-    gboolean has_img = (n->image_b64 && *n->image_b64);
-    int img_s = has_img ? (n->image_size > 0 ? n->image_size : (is_root ? 56 : 40)) : 0;
+    double img_w = 0, img_h = 0;
+    gboolean has_img = get_node_image_dimensions(n, &img_w, &img_h);
 
     double min_x = n->y - 18.0;
     double max_x = n->y + 18.0;
     if (is_root) {
-        min_x = n->y - (has_img ? (15.0 + img_s + 10.0) : 20.0) - n->text_w - 12.0;
+        min_x = n->y - (has_img ? (15.0 + img_w + 10.0) : 20.0) - n->text_w - 12.0;
     } else {
-        max_x = n->y + (has_img ? (15.0 + img_s + 10.0) : 20.0) + n->text_w + 12.0;
+        max_x = n->y + (has_img ? (15.0 + img_w + 10.0) : 20.0) + n->text_w + 12.0;
     }
-    double half_h = fmax(20.0, fmax(img_s, n->text_h) / 2.0 + 10.0);
+    double half_h = fmax(20.0, fmax(img_h, n->text_h) / 2.0 + 10.0);
 
     if (world_x >= min_x && world_x <= max_x &&
         world_y >= (n->x - half_h) && world_y <= (n->x + half_h)) {
@@ -980,12 +1003,16 @@ static void on_add_child_clicked(GtkButton *btn, gpointer user_data) {
     MindNode *parent = app_state->editing_node;
     if (!parent) return;
 
-    start_node_animation(parent, TRUE);
+    parent->collapsed = FALSE;
+    parent->anim_progress = 1.0;
+    cancel_animation_for_node(parent);
+
     MindNode *child = node_new("New Branch");
     child->parent = parent;
     child->depth = parent->depth + 1;
     g_ptr_array_add(parent->children, child);
 
+    app_state->editing_node = NULL;
     gtk_popover_popdown(GTK_POPOVER(app_state->editor_popover));
     commit_history();
 
@@ -993,6 +1020,7 @@ static void on_add_child_clicked(GtkButton *btn, gpointer user_data) {
     Chapter *ch = get_active_chapter();
     if (ch && ch->root) {
         compute_node_text_metrics(ch->root, pctx, 0);
+        update_subtree_animation_metrics(ch->root, 0);
         assign_coordinates(ch->root);
     }
     gtk_widget_queue_draw(app_state->drawing_area);
@@ -1032,75 +1060,72 @@ static void set_node_image_from_bytes(MindNode *n, GBytes *bytes) {
         compute_node_text_metrics(ch->root, pctx, 0);
     }
 
-    sync_editor_image_buttons(n);
+    if (app_state->editing_node == n) {
+        sync_editor_image_buttons(n);
+    }
     commit_history();
     gtk_widget_queue_draw(app_state->drawing_area);
 }
 
 static void on_image_file_selected(GObject *source, GAsyncResult *res, gpointer user_data) {
-    MindNode *target_node = user_data;
+    char *node_id = user_data;
     GtkFileDialog *dlg = GTK_FILE_DIALOG(source);
     GError *error = NULL;
     GFile *file = gtk_file_dialog_open_finish(dlg, res, &error);
-    
-    if (error) {
-        g_error_free(error);
+
+    if (error || !file) {
+        if (error) g_error_free(error);
         if (file) g_object_unref(file);
-        return;
-    }
-    if (!file || !target_node) {
-        if (file) g_object_unref(file);
+        g_free(node_id);
         return;
     }
 
-    g_autoptr(GFileInputStream) stream = g_file_read(file, NULL, &error);
+    Chapter *ch = get_active_chapter();
+    MindNode *target_node = (ch && ch->root) ? find_node_by_id(ch->root, node_id) : NULL;
+    g_free(node_id);
+
+    if (!target_node) {
+        g_object_unref(file);
+        return;
+    }
+
+    GBytes *file_bytes = g_file_load_bytes(file, NULL, NULL, NULL);
     g_object_unref(file);
+    if (!file_bytes) return;
 
-    if (error) {
-        g_error_free(error);
-        return;
-    }
-
-    GError *pix_err = NULL;
-    GdkPixbuf *pixbuf = gdk_pixbuf_new_from_stream(G_INPUT_STREAM(stream), NULL, &pix_err);
-    if (pix_err) {
-        g_error_free(pix_err);
-        return;
-    }
-
-    if (pixbuf) {
-        char *buffer = NULL;
-        gsize buffer_len = 0;
-        if (gdk_pixbuf_save_to_buffer(pixbuf, &buffer, &buffer_len, "png", NULL, NULL)) {
-            GBytes *png_bytes = g_bytes_new_take(buffer, buffer_len);
+    GdkTexture *tex = gdk_texture_new_from_bytes(file_bytes, NULL);
+    g_bytes_unref(file_bytes);
+    if (tex) {
+        GBytes *png_bytes = gdk_texture_save_to_png_bytes(tex);
+        if (png_bytes) {
             set_node_image_from_bytes(target_node, png_bytes);
             g_bytes_unref(png_bytes);
         }
-        g_object_unref(pixbuf);
+        g_object_unref(tex);
     }
 }
 
 static void on_upload_image_clicked(GtkButton *btn, gpointer user_data) {
     if (!app_state->editing_node) return;
-    MindNode *target_node = app_state->editing_node;
+    char *target_node_id = g_strdup(app_state->editing_node->id);
 
     GtkFileDialog *dlg = gtk_file_dialog_new();
     gtk_file_dialog_set_title(dlg, "Select Image");
-    
+
     GtkFileFilter *filter = gtk_file_filter_new();
     gtk_file_filter_set_name(filter, "Images (PNG, JPEG, WebP)");
     gtk_file_filter_add_mime_type(filter, "image/png");
     gtk_file_filter_add_mime_type(filter, "image/jpeg");
     gtk_file_filter_add_mime_type(filter, "image/webp");
-    
+
     GListStore *filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
     g_list_store_append(filters, filter);
     g_object_unref(filter);
-    
+
     gtk_file_dialog_set_filters(dlg, G_LIST_MODEL(filters));
     g_object_unref(filters);
 
-    gtk_file_dialog_open(dlg, GTK_WINDOW(app_state->window), NULL, on_image_file_selected, target_node);
+    gtk_file_dialog_open(dlg, GTK_WINDOW(app_state->window), NULL, on_image_file_selected, target_node_id);
     g_object_unref(dlg);
 }
 
@@ -1149,12 +1174,18 @@ static void on_remove_image_clicked(GtkButton *btn, gpointer user_data) {
 }
 
 static void on_clipboard_texture_read(GObject *source, GAsyncResult *res, gpointer user_data) {
+    char *node_id = user_data;
     GdkClipboard *cb = GDK_CLIPBOARD(source);
     g_autoptr(GdkTexture) tex = gdk_clipboard_read_texture_finish(cb, res, NULL);
-    if (tex && app_state->editing_node) {
+
+    Chapter *ch = get_active_chapter();
+    MindNode *target_node = (ch && ch->root) ? find_node_by_id(ch->root, node_id) : NULL;
+    g_free(node_id);
+
+    if (tex && target_node) {
         GBytes *png_bytes = gdk_texture_save_to_png_bytes(tex);
         if (png_bytes) {
-            set_node_image_from_bytes(app_state->editing_node, png_bytes);
+            set_node_image_from_bytes(target_node, png_bytes);
             g_bytes_unref(png_bytes);
         }
     }
@@ -1171,9 +1202,11 @@ static gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl, guint keyval,
         return TRUE;
     }
     if ((state & GDK_CONTROL_MASK) && (keyval == GDK_KEY_v || keyval == GDK_KEY_V)) {
+        if (!app_state->editing_node) return FALSE;
         GdkClipboard *cb = gtk_widget_get_clipboard(app_state->window);
         if (gdk_content_formats_contain_gtype(gdk_clipboard_get_formats(cb), GDK_TYPE_TEXTURE)) {
-            gdk_clipboard_read_texture_async(cb, NULL, on_clipboard_texture_read, NULL);
+            gdk_clipboard_read_texture_async(cb, NULL, on_clipboard_texture_read,
+                                             g_strdup(app_state->editing_node->id));
             return TRUE;
         }
     }
@@ -1263,7 +1296,7 @@ static void rebuild_sidebar(void) {
 
 static void load_chapter(const char *id, gboolean reset_view) {
     if (!id) return;
-    
+
     char *new_id = g_strdup(id);
     g_free(app_state->active_chapter_id);
     app_state->active_chapter_id = new_id;
@@ -1295,7 +1328,7 @@ static void load_chapter(const char *id, gboolean reset_view) {
  * Add Custom Map Dialog & Export / Import JSON
  * ========================================================================= */
 
-static void on_new_map_response(AdwAlertDialog * dialog, gchar *response, gpointer user_data) {
+static void on_new_map_response(AdwAlertDialog *dialog, gchar *response, gpointer user_data) {
     if (g_strcmp0(response, "create") == 0) {
         GtkEditable *entry = GTK_EDITABLE(user_data);
         const char *title = gtk_editable_get_text(entry);
@@ -1305,8 +1338,6 @@ static void on_new_map_response(AdwAlertDialog * dialog, gchar *response, gpoint
             c->title = g_strdup(title);
             c->root = node_new(title);
             c->root->image_size = 56;
-            c->root->collapsed = false;
-            c->root->anim_progress = 1.0;
             node_collapse_subtree_except_root(c->root);
             g_ptr_array_add(app_state->chapters, c);
             load_chapter(c->id, TRUE);
@@ -1369,6 +1400,7 @@ static void on_export_clicked(GtkButton *btn, gpointer user_data) {
     gtk_file_dialog_set_initial_name(dlg, default_name);
     g_free(default_name);
     gtk_file_dialog_save(dlg, GTK_WINDOW(app_state->window), NULL, on_export_file_saved, NULL);
+    g_object_unref(dlg);
 }
 
 static void on_import_file_opened(GObject *source, GAsyncResult *res, gpointer user_data) {
@@ -1405,6 +1437,7 @@ static void on_import_clicked(GtkButton *btn, gpointer user_data) {
     GtkFileDialog *dlg = gtk_file_dialog_new();
     gtk_file_dialog_set_title(dlg, "Import Mind Map (.json)");
     gtk_file_dialog_open(dlg, GTK_WINDOW(app_state->window), NULL, on_import_file_opened, NULL);
+    g_object_unref(dlg);
 }
 
 /* =========================================================================
@@ -1546,15 +1579,6 @@ static void apply_nord_css(void) {
 
 static gboolean initialize_app_state_cb(gpointer user_data) {
     load_state_from_disk();
-    
-    adw_overlay_split_view_set_show_sidebar(app_state->split_view, FALSE);
-
-    Chapter *active = get_active_chapter();
-    if (!active && app_state->chapters->len > 0) {
-        Chapter *first = g_ptr_array_index(app_state->chapters, 0);
-        g_free(app_state->active_chapter_id);
-        app_state->active_chapter_id = g_strdup(first->id);
-    }
 
     if (app_state->active_chapter_id) {
         load_chapter(app_state->active_chapter_id, TRUE);
@@ -1707,7 +1731,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_add_controller(app_state->window, win_keys);
 
     g_signal_connect(app_state->window, "close-request", G_CALLBACK(on_window_close_request), NULL);
-    
+
     gtk_window_present(GTK_WINDOW(app_state->window));
     g_idle_add(initialize_app_state_cb, NULL);
 }
