@@ -377,6 +377,16 @@ static void restore_from_json_string(const char *json_str, gboolean restore_ui_s
             app_state->active_chapter_id = g_strdup(saved_id);
         }
     }
+
+    if (app_state->drawing_area && gtk_widget_get_realized(app_state->drawing_area)) {
+        PangoContext *pctx = gtk_widget_get_pango_context(app_state->drawing_area);
+        for (guint i = 0; i < app_state->chapters->len; i++) {
+            Chapter *c = g_ptr_array_index(app_state->chapters, i);
+            if (c->root) {
+                compute_node_text_metrics(c->root, pctx, 0);
+            }
+        }
+    }
 }
 
 static char *get_state_file_path(void) {
@@ -549,7 +559,6 @@ static gboolean drawing_area_tick_cb(GtkWidget *widget, GdkFrameClock *frame_clo
         if (progress >= 1.0) {
             anim->node->anim_progress = anim->target_val;
         } else {
-            // Silky smooth ease-out quart curve
             double eased = 1.0 - pow(1.0 - progress, 4.0);
             anim->node->anim_progress = anim->start_val + (anim->target_val - anim->start_val) * eased;
         }
@@ -596,6 +605,7 @@ static void commit_history(void) {
     g_ptr_array_add(app_state->history, snap);
     if (app_state->history->len > 40) {
         g_ptr_array_remove_index(app_state->history, 0);
+        app_state->history_index--;
     } else {
         app_state->history_index++;
     }
@@ -672,7 +682,6 @@ static void draw_nodes_recursive(cairo_t *cr, PangoContext *pctx, MindNode *n) {
 
     double radius = (n->depth == 0) ? 12.0 : 7.0;
 
-    // Draw Circle
     cairo_new_path(cr);
     cairo_arc(cr, n->y, n->x, radius, 0, 2 * G_PI);
     if (n->collapsed && n->children && n->children->len > 0) {
@@ -685,7 +694,6 @@ static void draw_nodes_recursive(cairo_t *cr, PangoContext *pctx, MindNode *n) {
     cairo_set_source_rgba(cr, nord_col.red, nord_col.green, nord_col.blue, 1.0);
     cairo_stroke(cr);
 
-    // Draw Image (if present)
     gboolean is_root = (n->depth == 0);
     cairo_surface_t *surf = node_get_surface(n);
     gboolean has_img = (surf != NULL);
@@ -717,7 +725,6 @@ static void draw_nodes_recursive(cairo_t *cr, PangoContext *pctx, MindNode *n) {
         }
     }
 
-    // Draw Text
     if (n->name && *n->name) {
         PangoLayout *layout = create_node_pango_layout(pctx, n);
         PangoRectangle ink_rect, logical_rect;
@@ -968,31 +975,95 @@ static void set_node_image_from_bytes(MindNode *n, GBytes *bytes) {
     g_free(b64);
 
     if (n->image_size <= 0) n->image_size = (n->depth == 0) ? 56 : 40;
+
+    PangoContext *pctx = gtk_widget_get_pango_context(app_state->drawing_area);
+    Chapter *ch = get_active_chapter();
+    if (ch && ch->root && pctx) {
+        compute_node_text_metrics(ch->root, pctx, 0);
+    }
+
     sync_editor_image_buttons(n);
     commit_history();
     gtk_widget_queue_draw(app_state->drawing_area);
 }
 
 static void on_image_file_selected(GObject *source, GAsyncResult *res, gpointer user_data) {
+    MindNode *target_node = user_data;
     GtkFileDialog *dlg = GTK_FILE_DIALOG(source);
-    g_autoptr(GFile) file = gtk_file_dialog_open_finish(dlg, res, NULL);
-    if (!file || !app_state->editing_node) return;
+    GError *error = NULL;
+    GFile *file = gtk_file_dialog_open_finish(dlg, res, &error);
+    
+    if (error) {
+        g_error_free(error);
+        if (file) g_object_unref(file);
+        return;
+    }
+    if (!file || !target_node) {
+        if (file) g_object_unref(file);
+        return;
+    }
 
-    g_autoptr(GBytes) bytes = g_file_load_bytes(file, NULL, NULL, NULL);
-    if (bytes) {
-        set_node_image_from_bytes(app_state->editing_node, bytes);
+    g_autoptr(GFileInputStream) stream = g_file_read(file, NULL, &error);
+    g_object_unref(file);
+
+    if (error) {
+        g_error_free(error);
+        return;
+    }
+
+    GError *pix_err = NULL;
+    GdkPixbuf *pixbuf = gdk_pixbuf_new_from_stream(G_INPUT_STREAM(stream), NULL, &pix_err);
+    if (pix_err) {
+        g_error_free(pix_err);
+        return;
+    }
+
+    if (pixbuf) {
+        char *buffer = NULL;
+        gsize buffer_len = 0;
+        if (gdk_pixbuf_save_to_buffer(pixbuf, &buffer, &buffer_len, "png", NULL, NULL)) {
+            GBytes *png_bytes = g_bytes_new_take(buffer, buffer_len);
+            set_node_image_from_bytes(target_node, png_bytes);
+            g_bytes_unref(png_bytes);
+        }
+        g_object_unref(pixbuf);
     }
 }
 
 static void on_upload_image_clicked(GtkButton *btn, gpointer user_data) {
+    if (!app_state->editing_node) return;
+    MindNode *target_node = app_state->editing_node;
+
     GtkFileDialog *dlg = gtk_file_dialog_new();
     gtk_file_dialog_set_title(dlg, "Select Image");
-    gtk_file_dialog_open(dlg, GTK_WINDOW(app_state->window), NULL, on_image_file_selected, NULL);
+    
+    GtkFileFilter *filter = gtk_file_filter_new();
+    gtk_file_filter_set_name(filter, "Images (PNG, JPEG, WebP)");
+    gtk_file_filter_add_mime_type(filter, "image/png");
+    gtk_file_filter_add_mime_type(filter, "image/jpeg");
+    gtk_file_filter_add_mime_type(filter, "image/webp");
+    
+    GListStore *filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
+    g_list_store_append(filters, filter);
+    g_object_unref(filter);
+    
+    gtk_file_dialog_set_filters(dlg, G_LIST_MODEL(filters));
+    g_object_unref(filters);
+
+    gtk_file_dialog_open(dlg, GTK_WINDOW(app_state->window), NULL, on_image_file_selected, target_node);
+    g_object_unref(dlg);
 }
 
 static void on_resize_image_minus(GtkButton *btn, gpointer user_data) {
     if (!app_state->editing_node) return;
     app_state->editing_node->image_size = CLAMP(app_state->editing_node->image_size - 20, 20, 300);
+
+    PangoContext *pctx = gtk_widget_get_pango_context(app_state->drawing_area);
+    Chapter *ch = get_active_chapter();
+    if (ch && ch->root && pctx) {
+        compute_node_text_metrics(ch->root, pctx, 0);
+    }
+
     commit_history();
     gtk_widget_queue_draw(app_state->drawing_area);
 }
@@ -1000,6 +1071,13 @@ static void on_resize_image_minus(GtkButton *btn, gpointer user_data) {
 static void on_resize_image_plus(GtkButton *btn, gpointer user_data) {
     if (!app_state->editing_node) return;
     app_state->editing_node->image_size = CLAMP(app_state->editing_node->image_size + 20, 20, 300);
+
+    PangoContext *pctx = gtk_widget_get_pango_context(app_state->drawing_area);
+    Chapter *ch = get_active_chapter();
+    if (ch && ch->root && pctx) {
+        compute_node_text_metrics(ch->root, pctx, 0);
+    }
+
     commit_history();
     gtk_widget_queue_draw(app_state->drawing_area);
 }
@@ -1008,6 +1086,13 @@ static void on_remove_image_clicked(GtkButton *btn, gpointer user_data) {
     if (!app_state->editing_node) return;
     g_free(app_state->editing_node->image_b64);
     app_state->editing_node->image_b64 = NULL;
+
+    PangoContext *pctx = gtk_widget_get_pango_context(app_state->drawing_area);
+    Chapter *ch = get_active_chapter();
+    if (ch && ch->root && pctx) {
+        compute_node_text_metrics(ch->root, pctx, 0);
+    }
+
     sync_editor_image_buttons(app_state->editing_node);
     commit_history();
     gtk_widget_queue_draw(app_state->drawing_area);
