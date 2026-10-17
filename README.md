@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="mindmap.svg" alt="Logo" width="150" height="150">
+</p>
+
 # Simple Mind Map (Native GTK 4 / Libadwaita)
 
 A lightning-fast, native mind mapping application built with **GTK 4**, **Libadwaita**, and **Cairo**, styled with a gorgeous **Nord theme**. Designed for distraction-free organization, deep multi-layered hierarchies, and silky-smooth collapse/expand branch animations.
