@@ -569,18 +569,105 @@
             }
         });
 
-        function loadChapters() {
+const GIST_ID = "33955441fa35e9d45c798e2165a3761a";
+
+        // Normalizes various JSON formats into valid chapter objects
+        function parseGistContent(rawText, fallbackName = "Imported Map") {
+            const parsed = JSON.parse(rawText);
+            const items = Array.isArray(parsed) ? parsed : [parsed];
+            const validChapters = [];
+
+            items.forEach((item, idx) => {
+                if (!item || typeof item !== "object") return;
+
+                if (item.title && item.dataset) {
+                    // Standard app format: { id, title, dataset }
+                    const ch = {
+                        id: item.id || `gist_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 6)}`,
+                        title: item.title,
+                        dataset: item.dataset
+                    };
+                    ensureDataIds(ch.dataset);
+                    validChapters.push(ch);
+                } else if (item.name) {
+                    // Raw D3 hierarchy tree format: { name, children: [...] }
+                    ensureDataIds(item);
+                    validChapters.push({
+                        id: `gist_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 6)}`,
+                        title: item.name || fallbackName.replace(/\.json$/i, ""),
+                        dataset: item
+                    });
+                }
+            });
+
+            return validChapters;
+        }
+
+        async function fetchChaptersFromGist() {
+            const response = await fetch(`https://api.github.com/gists/${GIST_ID}`);
+            if (!response.ok) throw new Error(`Gist fetch failed: ${response.status}`);
+            const gistData = await response.json();
+
+            const imported = [];
+            const files = Object.values(gistData.files || {});
+
+            for (const file of files) {
+                try {
+                    let content = file.content;
+                    // If the Gist file is over 1MB, GitHub truncates 'content' and requires fetching 'raw_url'
+                    if (file.truncated && file.raw_url) {
+                        const rawRes = await fetch(file.raw_url);
+                        content = await rawRes.text();
+                    }
+                    if (content) {
+                        const extracted = parseGistContent(content, file.filename);
+                        imported.push(...extracted);
+                    }
+                } catch (err) {
+                    console.warn(`Skipping ${file.filename}: Could not parse as mind map JSON.`, err);
+                }
+            }
+
+            return imported;
+        }
+
+        async function loadChapters() {
             const stored = localStorage.getItem('nordBioMaps');
+            let loadedFromStorage = false;
+
             if (stored) {
                 try {
                     const parsed = JSON.parse(stored);
-                    chapters = Array.isArray(parsed) ? parsed : [JSON.parse(JSON.stringify(defaultChapter))];
+                    if (Array.isArray(parsed) && parsed.length > 0) {
+                        chapters = parsed;
+                        loadedFromStorage = true;
+                    }
                 } catch (e) {
-                    chapters = [JSON.parse(JSON.stringify(defaultChapter))];
+                    console.warn("Corrupted localStorage data, falling back to Gist import.");
                 }
-            } else {
-                chapters = [JSON.parse(JSON.stringify(defaultChapter))];
             }
+
+            // First launch (no saved maps in localStorage): fetch from GitHub Gist
+            if (!loadedFromStorage) {
+                try {
+                    showNotification("Importing mind maps from GitHub Gist...", true);
+                    const gistChapters = await fetchChaptersFromGist();
+                    if (gistChapters.length > 0) {
+                        chapters = gistChapters;
+                        localStorage.setItem('nordBioMaps', JSON.stringify(chapters));
+                        localStorage.setItem('nordBioActiveChapterId', chapters[0].id);
+                        activeChapterId = chapters[0].id;
+                        showNotification(`Imported ${chapters.length} map(s) from Gist!`, true);
+                    } else {
+                        chapters = [JSON.parse(JSON.stringify(defaultChapter))];
+                    }
+                } catch (err) {
+                    console.error("Failed to import Gist on first launch:", err);
+                    chapters = [JSON.parse(JSON.stringify(defaultChapter))];
+                    showNotification("Offline or Gist unavailable. Loaded default map.");
+                }
+            }
+
             initSidebar();
             if (chapters.length > 0) {
                 const targetId = chapters.find(c => c.id === activeChapterId) ? activeChapterId : chapters[0].id;
