@@ -5,7 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Simple Mind Map</title>
     
-    <script src="d3.v7.min.js"></script>
+    <!-- Loads local d3.v7.min.js first, falls back to CDN if local file is missing -->
+    <script src="d3.v7.min.js" onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js';"></script>
     
     <style>
         :root {
@@ -260,7 +261,7 @@
         .node text { 
             font-size: 13.5px; 
             fill: var(--adw-text); 
-            pointer-events: none; 
+            cursor: pointer;
             text-shadow: none; 
             font-family: "Cartograph CF", Cantarell, -apple-system, sans-serif; 
             letter-spacing: 0.1px; 
@@ -269,6 +270,7 @@
         /* Uncropped image styling */
         .node image { 
             opacity: 0.95; 
+            cursor: pointer;
             transition: opacity 0.2s, width 0.4s, height 0.4s, x 0.4s, y 0.4s; 
         }
         .node:hover image { opacity: 1; }
@@ -330,17 +332,17 @@
             </button>
         </div>
 
-        <div class="mobile-hint">Tap to expand • Double-tap or hold node to edit</div>
+        <div class="mobile-hint">Tap circle to expand • Double-tap or hold node to edit</div>
 
         <div id="map-container"></div>
     </main>
 
     <!-- Add Map Modal -->
-    <div id="add-map-modal" class="modal-overlay hidden">
+    <div id="add-map-modal" class="modal-overlay hidden" onclick="if(event.target === this) closeModal()">
         <div class="modal-box">
             <h3 class="modal-title">New Map</h3>
-            <input id="map-title" type="text" placeholder="Map Title..." style="margin-bottom: 1.25rem;" class="adw-input">
-            <div class="modal-error" id="json-error">Title required</div>
+            <input id="map-title" type="text" placeholder="Map Title..." style="margin-bottom: 1.25rem;" class="adw-input" onkeydown="handleModalKey(event)">
+            <div class="modal-error hidden" id="json-error">Title required</div>
             <div class="modal-actions">
                 <button onclick="closeModal()" class="adw-btn">Cancel</button>
                 <button onclick="saveCustomMap()" class="adw-btn adw-btn-primary">Create</button>
@@ -358,7 +360,7 @@
                   onpaste="handlePaste(event)"></textarea>
         
         <div class="inline-toolbar" onmousedown="event.preventDefault()">
-            <button onclick="closeNodeEditor()" class="destructive" title="Save & Close Editor">
+            <button onclick="closeNodeEditor()" class="accent" title="Save & Close Editor (Enter)">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <polyline points="20 6 9 17 4 12"></polyline>
                 </svg>
@@ -421,7 +423,7 @@
             
             <div class="divider"></div>
             
-            <button onclick="closeNodeEditor()" class="dim" title="Close Menu (Esc)">
+            <button onclick="cancelNodeEditor()" class="dim" title="Cancel Changes (Esc)">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <line x1="18" y1="6" x2="6" y2="18"></line>
                     <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -454,7 +456,7 @@
         };
 
         function ensureDataIds(d) {
-            if (!d.id) d.id = 'node_' + Math.random().toString(36).substr(2, 9);
+            if (!d.id) d.id = 'node_' + Math.random().toString(36).slice(2, 11);
             if (d.children) d.children.forEach(ensureDataIds);
             if (d._children) d._children.forEach(ensureDataIds);
         }
@@ -491,6 +493,7 @@
         let activeChapterId = localStorage.getItem('nordBioActiveChapterId') || "breathing_exchange";
         let history = [];
         let historyIndex = -1;
+        let toastTimeout = null;
 
         function commitHistory() {
             const currentState = JSON.stringify(chapters);
@@ -501,27 +504,34 @@
             else historyIndex++;
         }
 
+        function restoreHistoryState() {
+            closeNodeEditor(true);
+            chapters = JSON.parse(JSON.stringify(history[historyIndex]));
+            localStorage.setItem('nordBioMaps', JSON.stringify(chapters));
+            initSidebar();
+            const currentChapter = chapters.find(c => c.id === activeChapterId);
+            if (currentChapter) {
+                refreshMap(currentChapter.dataset);
+            } else if (chapters.length > 0) {
+                loadChapter(chapters[0].id);
+            } else {
+                d3.select("#map-container").selectAll("*").remove();
+                activeChapterId = null;
+                localStorage.removeItem('nordBioActiveChapterId');
+            }
+        }
+
         function undo() {
             if (historyIndex > 0) {
                 historyIndex--;
-                chapters = JSON.parse(JSON.stringify(history[historyIndex]));
-                localStorage.setItem('nordBioMaps', JSON.stringify(chapters));
-                initSidebar();
-                const currentChapter = chapters.find(c => c.id === activeChapterId);
-                if (currentChapter) refreshMap(currentChapter.dataset);
-                else if (chapters.length > 0) loadChapter(chapters[0].id);
+                restoreHistoryState();
             }
         }
 
         function redo() {
             if (historyIndex < history.length - 1) {
                 historyIndex++;
-                chapters = JSON.parse(JSON.stringify(history[historyIndex]));
-                localStorage.setItem('nordBioMaps', JSON.stringify(chapters));
-                initSidebar();
-                const currentChapter = chapters.find(c => c.id === activeChapterId);
-                if (currentChapter) refreshMap(currentChapter.dataset);
-                else if (chapters.length > 0) loadChapter(chapters[0].id);
+                restoreHistoryState();
             }
         }
 
@@ -539,12 +549,13 @@
 
         document.addEventListener('keydown', function(event) {
             if (event.ctrlKey || event.metaKey) {
-                if (event.key === 'z') {
+                const key = event.key.toLowerCase();
+                if (key === 'z') {
                     if (document.activeElement.tagName === 'TEXTAREA' || document.activeElement.tagName === 'INPUT') return;
                     if (event.shiftKey) redo();
                     else undo();
                     event.preventDefault();
-                } else if (event.key === 'y') {
+                } else if (key === 'y') {
                     if (document.activeElement.tagName === 'TEXTAREA' || document.activeElement.tagName === 'INPUT') return;
                     redo();
                     event.preventDefault();
@@ -561,9 +572,14 @@
         function loadChapters() {
             const stored = localStorage.getItem('nordBioMaps');
             if (stored) {
-                try { chapters = JSON.parse(stored); } catch (e) { chapters = [defaultChapter]; }
+                try {
+                    const parsed = JSON.parse(stored);
+                    chapters = Array.isArray(parsed) ? parsed : [JSON.parse(JSON.stringify(defaultChapter))];
+                } catch (e) {
+                    chapters = [JSON.parse(JSON.stringify(defaultChapter))];
+                }
             } else {
-                chapters = [defaultChapter];
+                chapters = [JSON.parse(JSON.stringify(defaultChapter))];
             }
             initSidebar();
             if (chapters.length > 0) {
@@ -588,16 +604,23 @@
                 const li = document.createElement('li');
                 const isActive = chapter.id === activeChapterId;
                 
-                li.innerHTML = `
-                    <div onclick="loadChapter('${chapter.id}')" class="chapter-btn-wrapper ${isActive ? 'active' : ''}">
-                        <span class="chapter-btn-text">
-                            ${chapter.title}
-                        </span>
-                        <button onclick="deleteChapter('${chapter.id}', event)" class="chapter-btn-delete" title="Delete Map">
-                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-                        </button>
-                    </div>
-                `;
+                const wrapper = document.createElement('div');
+                wrapper.className = `chapter-btn-wrapper ${isActive ? 'active' : ''}`;
+                wrapper.addEventListener('click', () => loadChapter(chapter.id));
+
+                const span = document.createElement('span');
+                span.className = 'chapter-btn-text';
+                span.textContent = chapter.title;
+
+                const delBtn = document.createElement('button');
+                delBtn.className = 'chapter-btn-delete';
+                delBtn.title = 'Delete Map';
+                delBtn.innerHTML = `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>`;
+                delBtn.addEventListener('click', (e) => deleteChapter(chapter.id, e));
+
+                wrapper.appendChild(span);
+                wrapper.appendChild(delBtn);
+                li.appendChild(wrapper);
                 list.appendChild(li);
             });
         }
@@ -611,7 +634,7 @@
                 localStorage.setItem('nordBioSidebarCollapsed', isCollapsed);
                 setTimeout(() => {
                     window.dispatchEvent(new Event('resize'));
-                }, 300);
+                }, 310);
             } else {
                 if (sidebar.classList.contains('open')) {
                     sidebar.classList.remove('open');
@@ -626,11 +649,25 @@
         function openModal() {
             document.getElementById('add-map-modal').classList.remove('hidden');
             document.getElementById('json-error').classList.add('hidden');
+            const input = document.getElementById('map-title');
+            input.value = '';
+            setTimeout(() => input.focus(), 50);
         }
 
         function closeModal() {
             document.getElementById('add-map-modal').classList.add('hidden');
             document.getElementById('map-title').value = '';
+            document.getElementById('json-error').classList.add('hidden');
+        }
+
+        function handleModalKey(event) {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                saveCustomMap();
+            } else if (event.key === 'Escape') {
+                event.preventDefault();
+                closeModal();
+            }
         }
 
         function saveCustomMap() {
@@ -656,20 +693,27 @@
 
         function showNotification(msg, isSuccess = false) {
             const toast = document.getElementById('toast-msg');
+            if (toastTimeout) clearTimeout(toastTimeout);
             toast.innerText = msg;
             toast.className = `toast ${isSuccess ? 'success' : 'error'}`;
             toast.style.opacity = '1';
-            setTimeout(() => toast.style.opacity = '0', 3000);
+            toastTimeout = setTimeout(() => {
+                toast.style.opacity = '0';
+            }, 3000);
         }
 
         function exportMap() {
+            if (activeD3Node) closeNodeEditor();
             const chapter = chapters.find(c => c.id === activeChapterId);
-            if (!chapter) return;
+            if (!chapter) {
+                showNotification("No active map to export.");
+                return;
+            }
             const blob = new Blob([JSON.stringify(chapter, null, 2)], { type: "application/json" });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `${chapter.title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_map.json`;
+            a.download = `${(chapter.title || 'mind_map').replace(/[^a-z0-9]/gi, '_').toLowerCase()}_map.json`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -692,6 +736,8 @@
                         initSidebar();
                         loadChapter(importedData.id);
                         showNotification("Map imported successfully!", true);
+                    } else {
+                        showNotification("Invalid map file format.");
                     }
                 } catch (err) {
                     showNotification("Error parsing the file.");
@@ -704,6 +750,7 @@
         function deleteChapter(id, event) {
             event.stopPropagation();
             if (confirm("Are you sure you want to delete this mind map?")) {
+                closeNodeEditor(true);
                 chapters = chapters.filter(c => c.id !== id);
                 saveChapters();
                 initSidebar();
@@ -724,11 +771,12 @@
         let activeD3Node = null;
 
         function loadChapter(id) {
+            closeNodeEditor(true);
             activeChapterId = id;
             localStorage.setItem('nordBioActiveChapterId', id);
             initSidebar();
             const chapter = chapters.find(c => c.id === id);
-            if(chapter) {
+            if (chapter) {
                 ensureDataIds(chapter.dataset);
                 ensureImageAspects(chapter.dataset, () => {
                     localStorage.setItem('nordBioMaps', JSON.stringify(chapters));
@@ -768,16 +816,20 @@
             if (!nodeEl) return;
             
             const textEl = d3.select(nodeEl).select("text").node();
+            const circleEl = d3.select(nodeEl).select("circle").node();
             if (!textEl) return;
             
-            const rect = textEl.getBoundingClientRect();
+            const textRect = textEl.getBoundingClientRect();
+            const anchorRect = (textRect.width > 0 && textRect.height > 0)
+                ? textRect
+                : (circleEl ? circleEl.getBoundingClientRect() : textRect);
             const editorRect = editorContainer.getBoundingClientRect();
             
             const vw = window.innerWidth;
             const vh = window.innerHeight;
             
-            let left = rect.left - 8;
-            let top = rect.top - 8;
+            let left = anchorRect.left - 8;
+            let top = anchorRect.top - 8;
             
             if (left + editorRect.width > vw - 8) {
                 left = vw - editorRect.width - 8;
@@ -806,6 +858,14 @@
                 const newText = textarea.value.trim();
                 if (activeD3Node.data.name !== newText) {
                     activeD3Node.data.name = newText;
+                    // Keep chapter title in sync if root node name was edited
+                    if (activeD3Node.depth === 0) {
+                        const chapter = chapters.find(c => c.id === activeChapterId);
+                        if (chapter && newText) {
+                            chapter.title = newText;
+                            initSidebar();
+                        }
+                    }
                     saveChapters();
                 }
                 const targetNode = activeD3Node;
@@ -817,25 +877,42 @@
             editorContainer.classList.add('hidden');
         }
 
-        function openNodeEditor(event, d, nodeElement) {
-            if (activeD3Node) closeNodeEditor();
-
-            activeD3Node = d;
+        function cancelNodeEditor() {
             const editorContainer = document.getElementById('inline-editor-container');
             const textarea = document.getElementById('inline-text-editor');
-            const textEl = d3.select(nodeElement).select("text").node();
+            if (activeD3Node) {
+                textarea.value = activeD3Node.data.name || "";
+                activeD3Node = null;
+            }
+            d3.selectAll('.node text').style("visibility", "visible");
+            editorContainer.classList.add('hidden');
+        }
+
+        function openNodeEditor(event, d, nodeElement) {
+            if (activeD3Node && activeD3Node.data.id !== d.data.id) {
+                closeNodeEditor();
+            }
+
+            // Re-locate node in current rootData hierarchy in case refreshMap recreated it
+            const freshNode = rootData ? rootData.descendants().find(n => n.data.id === d.data.id) : d;
+            activeD3Node = freshNode || d;
+
+            const freshNodeEl = d3.selectAll('.node').filter(n => n.data.id === activeD3Node.data.id).node() || nodeElement;
+            const editorContainer = document.getElementById('inline-editor-container');
+            const textarea = document.getElementById('inline-text-editor');
+            const textEl = d3.select(freshNodeEl).select("text").node();
             
-            const rect = textEl.getBoundingClientRect();
-            textarea.value = d.data.name || "";
+            const rect = textEl ? textEl.getBoundingClientRect() : { width: 200 };
+            textarea.value = activeD3Node.data.name || "";
             const maxAllowedWidth = window.innerWidth - 24;
-            textarea.style.width = Math.min(Math.max(rect.width + 16, 200), maxAllowedWidth) + 'px';
+            textarea.style.width = Math.min(Math.max(rect.width + 24, 200), maxAllowedWidth) + 'px';
             
-            d3.select(textEl).style("visibility", "hidden");
+            if (textEl) d3.select(textEl).style("visibility", "hidden");
             editorContainer.classList.remove('hidden');
             
-            document.getElementById('inline-btn-delete').classList.toggle('hidden', d.depth === 0);
+            document.getElementById('inline-btn-delete').classList.toggle('hidden', activeD3Node.depth === 0);
             
-            const hasImg = !!d.data.image;
+            const hasImg = !!activeD3Node.data.image;
             document.getElementById('inline-btn-remove-img').classList.toggle('hidden', !hasImg);
             document.getElementById('inline-btn-img-minus').classList.toggle('hidden', !hasImg);
             document.getElementById('inline-btn-img-plus').classList.toggle('hidden', !hasImg);
@@ -856,8 +933,8 @@
                 event.preventDefault(); 
                 closeNodeEditor(); 
             } else if (event.key === 'Escape') {
-                if (activeD3Node) document.getElementById('inline-text-editor').value = activeD3Node.data.name || ""; 
-                closeNodeEditor();
+                event.preventDefault();
+                cancelNodeEditor();
             } else if (event.key === 'Tab') {
                 event.preventDefault();
                 addChildNode();
@@ -892,6 +969,7 @@
         function handlePaste(event) {
             if (!activeD3Node) return;
             const clipboardData = event.clipboardData || window.clipboardData;
+            if (!clipboardData || !clipboardData.items) return;
             const items = clipboardData.items;
 
             for (let i = 0; i < items.length; i++) {
@@ -1032,6 +1110,7 @@
 
         function refreshMap(actionSourceData) {
             const chapter = chapters.find(c => c.id === activeChapterId);
+            if (!chapter) return;
             ensureDataIds(chapter.dataset); 
             
             const oldRoot = rootData;
@@ -1095,15 +1174,35 @@
                 const newText = textarea.value.trim();
                 if (activeD3Node.data.name !== newText) {
                     activeD3Node.data.name = newText;
+                    if (activeD3Node.depth === 0 && newText) {
+                        const chapter = chapters.find(c => c.id === activeChapterId);
+                        if (chapter) {
+                            chapter.title = newText;
+                            initSidebar();
+                        }
+                    }
                 }
 
-                activeD3Node.data.children.push({ id: 'node_' + Date.now(), name: "" });
+                const newChildId = 'node_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
+                activeD3Node.data.children.push({ id: newChildId, name: "New Node" });
                 saveChapters();
                 
                 const targetData = activeD3Node.data;
                 activeD3Node = null;
                 closeNodeEditor(true);
                 refreshMap(targetData);
+
+                // Automatically open editor on the newly created child node after transition
+                setTimeout(() => {
+                    if (!rootData) return;
+                    const createdNode = rootData.descendants().find(n => n.data.id === newChildId);
+                    const createdEl = d3.selectAll('.node').filter(n => n.data.id === newChildId).node();
+                    if (createdNode && createdEl) {
+                        openNodeEditor(null, createdNode, createdEl);
+                        const ed = document.getElementById('inline-text-editor');
+                        ed.select();
+                    }
+                }, 470);
             }
         }
 
@@ -1227,15 +1326,15 @@
             const container = document.getElementById('map-container');
             d3.select(container).selectAll("*").remove();
             
-            const width = container.clientWidth;
-            const height = container.clientHeight;
+            const width = container.clientWidth || window.innerWidth;
+            const height = container.clientHeight || window.innerHeight;
 
             svg = d3.select(container).append("svg")
                 .attr("width", "100%")
                 .attr("height", "100%")
                 .attr("viewBox", [0, 0, width, height])
                 .on("click", (event) => {
-                    if (event.target.tagName === 'svg') {
+                    if (!event.target.closest('.node')) {
                         closeNodeEditor(); 
                     }
                 });
@@ -1269,6 +1368,21 @@
 
         let lastTapTime = 0;
         let lastTapNodeId = null;
+        let singleTapTimer = null;
+        let longPressTimer = null;
+
+        function toggleNodeChildren(d) {
+            if (d.children || d._children) {
+                if (d.children) {
+                    d._children = d.children;
+                    d.children = null;
+                } else {
+                    d.children = d._children;
+                    d._children = null;
+                }
+                updateD3(d);
+            }
+        }
 
         function updateD3(source) {
             const duration = 450;
@@ -1282,32 +1396,46 @@
 
             const nodeEnter = node.enter().append("g")
                 .attr("class", "node")
-                .attr("transform", d => `translate(${source.y0},${source.x0})`)
+                .attr("transform", d => `translate(${source.y0 || 0},${source.x0 || 0})`)
+                .on("pointerdown", function(event, d) {
+                    if (event.pointerType === 'touch') {
+                        clearTimeout(longPressTimer);
+                        longPressTimer = setTimeout(() => {
+                            openNodeEditor(event, d, this);
+                        }, 500);
+                    }
+                })
+                .on("pointerup pointercancel pointermove", function() {
+                    clearTimeout(longPressTimer);
+                })
                 .on("click", function(event, d) {
                     event.stopPropagation();
                     
-                    // Mobile & desktop double-tap / double-click detection to open editor
                     const now = Date.now();
-                    if (lastTapNodeId === d.data.id && (now - lastTapTime) < 320) {
+                    const isDoubleTap = (lastTapNodeId === d.data.id && (now - lastTapTime) < 320);
+
+                    if (isDoubleTap) {
+                        clearTimeout(singleTapTimer);
                         lastTapTime = 0;
                         lastTapNodeId = null;
                         openNodeEditor(event, d, this);
                         return;
                     }
+
                     lastTapTime = now;
                     lastTapNodeId = d.data.id;
 
-                    closeNodeEditor(); 
-                    
-                    if (d.children || d._children) {
-                        if (d.children) { d._children = d.children; d.children = null; } 
-                        else { d.children = d._children; d._children = null; }
-                        updateD3(d);
-                    }
+                    // Delay single-click toggle slightly so a double-click doesn't accidentally collapse the node
+                    clearTimeout(singleTapTimer);
+                    singleTapTimer = setTimeout(() => {
+                        closeNodeEditor();
+                        toggleNodeChildren(d);
+                    }, 220);
                 })
                 .on("contextmenu", function(event, d) {
                     event.preventDefault(); 
                     event.stopPropagation();
+                    clearTimeout(singleTapTimer);
                     openNodeEditor(event, d, this);
                 });
 
@@ -1323,8 +1451,7 @@
                 .style("fill", d => d.depth === 0 ? "var(--adw-accent)" : "var(--adw-text)")
                 .call(wrapNodeText);
 
-            nodeEnter.append("image")
-                .style("pointer-events", "none");
+            nodeEnter.append("image");
 
             const nodeUpdate = nodeEnter.merge(node)
                 .transition().duration(duration)
@@ -1378,7 +1505,7 @@
             const linkEnter = link.enter().insert("path", "g")
                 .attr("class", "link")
                 .attr("d", d => {
-                    const o = {x: source.x0, y: source.y0};
+                    const o = {x: source.x0 || 0, y: source.y0 || 0};
                     return linkGenerator({source: o, target: o});
                 })
                 .style("stroke", d => getNordColor(d.source.depth)) 
@@ -1415,6 +1542,10 @@
                 if (window.innerWidth >= 1024) {
                     document.getElementById('overlay').classList.add('hidden');
                 }
+                const container = document.getElementById('map-container');
+                if (svg && container && container.clientWidth > 0 && container.clientHeight > 0) {
+                    svg.attr("viewBox", [0, 0, container.clientWidth, container.clientHeight]);
+                }
                 updateEditorPosition();
             });
         });
@@ -1422,6 +1553,7 @@
         window.toggleSidebar = toggleSidebar;
         window.openModal = openModal;
         window.closeModal = closeModal;
+        window.handleModalKey = handleModalKey;
         window.saveCustomMap = saveCustomMap;
         window.deleteChapter = deleteChapter;
         window.loadChapter = loadChapter;
@@ -1434,6 +1566,7 @@
         
         window.openNodeEditor = openNodeEditor;
         window.closeNodeEditor = closeNodeEditor;
+        window.cancelNodeEditor = cancelNodeEditor;
         window.updateEditorPosition = updateEditorPosition;
         window.handleInlineKey = handleInlineKey;
         window.handlePaste = handlePaste;
